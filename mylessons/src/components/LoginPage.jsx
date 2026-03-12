@@ -6,7 +6,7 @@ import Cookies from 'js-cookie';
 import {
     Container, Box, Card, Typography, Avatar, Button,
     Paper, Radio, RadioGroup, FormControlLabel, FormControl, Divider,
-    CircularProgress // Aggiunto per il feedback visivo
+    CircularProgress, Stack
 } from '@mui/material';
 import { APPS_SCRIPT_URL } from "./config/config";
 
@@ -17,7 +17,7 @@ function LoginPage() {
     const [role, setRole] = useState('');
     const [showRoleSelection, setShowRoleSelection] = useState(false);
     const [tempToken, setTempToken] = useState(null);
-    const [loading, setLoading] = useState(false); // MANCAVA QUESTO!
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         const savedUser = Cookies.get('user_session');
@@ -30,6 +30,36 @@ function LoginPage() {
         }
     }, []);
 
+    // FUNZIONE CENTRALIZZATA PER IL SALVATAGGIO SESSIONE
+    const completeLogin = (userData, token, selectedRole) => {
+        // Costruiamo l'oggetto sessione definitivo
+        const sessionData = {
+            ...userData,
+            id_token: token, // Fondamentale per le chiamate API sicure
+            role: selectedRole
+        };
+
+        // Salvataggio fisico nel Browser
+        Cookies.set('user_session', JSON.stringify(sessionData), {
+            expires: 1,
+            secure: true,
+            sameSite: 'strict'
+        });
+
+        setUser(sessionData);
+        setShowRoleSelection(false);
+
+        // Notifica il backend (Registrazione/Aggiornamento)
+        fetch(APPS_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            body: JSON.stringify({ id_token: token, role: selectedRole }),
+        });
+
+        // Vai alla Dashboard
+        navigate('/dashboard');
+    };
+
     const handleLoginSuccess = async (response) => {
         const id_token = response.credential;
         const decoded = jwtDecode(id_token);
@@ -38,28 +68,26 @@ function LoginPage() {
         setLoading(true);
 
         try {
-            // Per Apps Script, a volte aggiungere un timestamp evita la cache del browser
-            const checkRes = await fetch(`${APPS_SCRIPT_URL}?email=${email}&t=${Date.now()}`, {
+            // Verifica se l'utente è già presente nel database
+            const checkRes = await fetch(`${APPS_SCRIPT_URL}?action=checkUser&email=${email}&t=${Date.now()}`, {
                 method: 'GET',
-                // redirect: 'follow' è fondamentale per gestire il comportamento di GAS
                 redirect: 'follow'
             });
 
             const checkData = await checkRes.json();
 
             if (checkData.exists) {
-                // UTENTE GIÀ REGISTRATO
-                const userData = { ...decoded, role: checkData.role };
-                completeLogin(userData, id_token, checkData.role);
+                // UTENTE ESISTENTE: effettua il login diretto
+                completeLogin(decoded, id_token, checkData.role);
             } else {
-                // NUOVO UTENTE
+                // NUOVO UTENTE: deve scegliere il ruolo
                 setTempToken(id_token);
                 setUser(decoded);
                 setShowRoleSelection(true);
             }
         } catch (error) {
             console.error("Errore verifica utente:", error);
-            // In caso di errore (es. CORS), mostriamo comunque la scelta per non bloccare l'utente
+            // Fallback: in caso di errore permettiamo comunque la scelta ruolo
             setTempToken(id_token);
             setUser(decoded);
             setShowRoleSelection(true);
@@ -68,26 +96,10 @@ function LoginPage() {
         }
     };
 
-    const completeLogin = (userData, token, selectedRole) => {
-        Cookies.set('user_session', JSON.stringify(userData), { expires: 1, secure: true });
-        setUser(userData);
-        setShowRoleSelection(false);
-
-        // Notifica il backend
-        fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            body: JSON.stringify({ id_token: token, role: selectedRole }),
-        });
-
-        // NAVIGAZIONE ALLA DASHBOARD DOPO IL LOGIN
-        navigate('/dashboard');
-    };
-
-    const confirmRegistration = async () => {
-        if (!role) return alert("Seleziona un ruolo!");
-        completeLogin({ ...user, role: role }, tempToken, role);
-        alert("Registrazione completata come " + role);
+    const confirmRegistration = () => {
+        if (!role) return alert("Per favore, seleziona un ruolo!");
+        // Usiamo tempToken che è stato salvato al momento del handleLoginSuccess
+        completeLogin(user, tempToken, role);
     };
 
     const handleLogout = () => {
@@ -102,28 +114,46 @@ function LoginPage() {
         <Container maxWidth="sm">
             <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 {loading ? (
-                    <CircularProgress />
+                    <Box sx={{ textAlign: 'center', mt: 4 }}>
+                        <CircularProgress size={60} />
+                        <Typography sx={{ mt: 2 }}>Verifica profilo in corso...</Typography>
+                    </Box>
                 ) : user && !showRoleSelection ? (
-                    <Card sx={{ width: '100%', textAlign: 'center', p: 3, borderRadius: 4 }}>
-                        <Avatar src={user.picture} sx={{ width: 80, height: 80, mx: 'auto', mb: 2 }} />
-                        <Typography variant="h5">Bentornato, {user.name}</Typography>
-                        <Typography color="text.secondary">Accesso come: <b>{user.role}</b></Typography>
-                        <Button onClick={handleLogout} color="error" sx={{ mt: 3 }} variant="outlined">Logout</Button>
+                    <Card sx={{ width: '100%', textAlign: 'center', p: 4, borderRadius: 4, boxShadow: 3 }}>
+                        <Avatar src={user.picture} sx={{ width: 90, height: 90, mx: 'auto', mb: 2, border: '3px solid', borderColor: 'primary.main' }} />
+                        <Typography variant="h5" fontWeight="bold">Bentornato, {user.given_name}</Typography>
+                        <Typography color="text.secondary" sx={{ mb: 3 }}>Sei loggato come <b>{user.role}</b></Typography>
+                        <Stack spacing={2}>
+                            <Button variant="contained" fullWidth onClick={() => navigate('/dashboard')} size="large">
+                                Vai alla Dashboard
+                            </Button>
+                            <Button onClick={handleLogout} color="error" variant="outlined">
+                                Esci dall'account
+                            </Button>
+                        </Stack>
                     </Card>
                 ) : showRoleSelection ? (
-                    <Paper sx={{ p: 4, width: '100%', borderRadius: 4 }}>
-                        <Typography variant="h5" gutterBottom textAlign="center">Sei un Insegnante o uno Studente?</Typography>
-                        <Divider sx={{ my: 2 }} />
-                        <FormControl component="fieldset" sx={{ width: '100%', mt: 2 }}>
+                    <Paper sx={{ p: 4, width: '100%', borderRadius: 4, boxShadow: 3 }}>
+                        <Typography variant="h5" gutterBottom textAlign="center" fontWeight="bold">Benvenuto!</Typography>
+                        <Typography variant="body2" textAlign="center" color="text.secondary" sx={{ mb: 3 }}>
+                            Per completare la registrazione, indica il tuo profilo:
+                        </Typography>
+                        <Divider sx={{ mb: 3 }} />
+                        <FormControl component="fieldset" sx={{ width: '100%' }}>
                             <RadioGroup value={role} onChange={(e) => setRole(e.target.value)}>
-                                <FormControlLabel value="Insegnante" control={<Radio />} label="Insegnante" />
-                                <FormControlLabel value="Studente" control={<Radio />} label="Studente" />
+                                <Paper variant="outlined" sx={{ p: 1, mb: 1, borderRadius: 2 }}>
+                                    <FormControlLabel value="Insegnante" control={<Radio />} label="Insegnante" sx={{ width: '100%', m: 0 }} />
+                                </Paper>
+                                <Paper variant="outlined" sx={{ p: 1, mb: 1, borderRadius: 2 }}>
+                                    <FormControlLabel value="Studente" control={<Radio />} label="Studente" sx={{ width: '100%', m: 0 }} />
+                                </Paper>
                             </RadioGroup>
                         </FormControl>
                         <Button
                             variant="contained"
                             fullWidth
-                            sx={{ mt: 3 }}
+                            size="large"
+                            sx={{ mt: 3, py: 1.5, borderRadius: 3 }}
                             onClick={confirmRegistration}
                             disabled={!role}
                         >
@@ -131,13 +161,19 @@ function LoginPage() {
                         </Button>
                     </Paper>
                 ) : (
-                    <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 4, boxShadow: 3 }}>
-                        <Typography variant="h5" sx={{ mb: 3 }}>Accedi alla Piattaforma</Typography>
-                        <GoogleLogin
-                            onSuccess={handleLoginSuccess}
-                            onError={() => alert("Login fallito")}
-                            useOneTap
-                        />
+                    <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 5, boxShadow: 4 }}>
+                        <Typography variant="h4" fontWeight="bold" sx={{ mb: 1 }}>Login</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
+                            Accedi con il tuo account Google istituzionale
+                        </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                            <GoogleLogin
+                                onSuccess={handleLoginSuccess}
+                                onError={() => alert("Login fallito. Riprova.")}
+                                useOneTap
+                                shape="pill"
+                            />
+                        </Box>
                     </Paper>
                 )}
             </Box>

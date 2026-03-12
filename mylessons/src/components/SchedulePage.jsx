@@ -16,6 +16,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useNavigate } from 'react-router-dom';
+import Cookies from 'js-cookie';
 import { APPS_SCRIPT_URL } from "./config/config";
 
 const getStudentColor = (email) => {
@@ -28,7 +29,7 @@ const getStudentColor = (email) => {
     return `hsl(${hue}, 65%, 40%)`;
 };
 
-export default function SchedulePage({ user }) {
+export default function SchedulePage() {
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -58,48 +59,120 @@ export default function SchedulePage({ user }) {
 
     const giorni = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 
+    // 1. Recupero centralizzato del token e sessione
+    const getAuthData = useCallback(() => {
+        const sessionStr = Cookies.get('user_session');
+        if (!sessionStr) return null;
+        try {
+            return JSON.parse(sessionStr);
+        } catch (e) {
+            return null;
+        }
+    }, []);
+
+    // 2. Caricamento dati iniziale (GET)
     const fetchData = useCallback(async () => {
+        const session = getAuthData();
+        if (!session?.id_token) return navigate('/login');
+
         setLoading(true);
         try {
             const [resSched, resSubs] = await Promise.all([
-                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherId=${user.sub}`),
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${user.sub}`)
+                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&token=${session.id_token}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`)
             ]);
+
             const dataSched = await resSched.json();
             const dataSubs = await resSubs.json();
+
+            // Controllo validità sessione dal backend
+            if (dataSched.message?.includes("autorizzato") || dataSubs.message?.includes("autorizzato")) {
+                Cookies.remove('user_session');
+                return navigate('/login');
+            }
+
             if (dataSched.status === "success") {
                 setSchedules(dataSched.data);
                 setLocalSchedules(dataSched.data);
             }
-            if (dataSubs.status === "success") setSubscribers(dataSubs.data);
+            if (dataSubs.status === "success") {
+                setSubscribers(dataSubs.data);
+            }
+
             setHasChanges(false);
         } catch (error) {
             console.error("Errore recupero dati:", error);
         } finally {
             setLoading(false);
         }
-    }, [user.sub]);
+    }, [getAuthData, navigate]);
 
     useEffect(() => {
         fetchData();
     }, [fetchData]);
 
-    const getLessonsData = (targetDay) => {
-        return localSchedules
-            .filter(slot => slot.giorno === targetDay)
-            .sort((a, b) => a.ora.localeCompare(b.ora));
+    // 3. Salvataggio orari (POST autenticata)
+    const saveFullDay = async () => {
+        const session = getAuthData();
+        if (!session?.id_token) return navigate('/login');
+
+        setSaving(true);
+        try {
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                mode: 'cors', // Usiamo cors per leggere la risposta
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                    action: "saveFullSchedule",
+                    id_token: session.id_token,
+                    allSchedules: localSchedules
+                })
+            });
+
+            const resultText = await response.text();
+
+            if (resultText.includes("Success")) {
+                setHasChanges(false);
+                setSchedules(localSchedules);
+                // Feedback visivo rapido
+                alert("Agenda aggiornata correttamente!");
+            } else {
+                alert("Errore durante il salvataggio: " + resultText);
+            }
+        } catch (e) {
+            console.error("Errore salvataggio:", e);
+            alert("Errore di connessione. Riprova.");
+        } finally {
+            setSaving(false);
+        }
     };
 
+    // 4. Logica di aggiornamento slot con aggancio nomi
     const handleUpdateLocalSlot = (ora, giorno, email) => {
-        const student = subscribers.find(s => s.studentEmail === email);
+        // Cerchiamo lo studente nei sottoscrittori per recuperare il nome completo
+        const student = subscribers.find(s =>
+            s.studentEmail.toLowerCase().trim() === email.toLowerCase().trim()
+        );
+
         const updated = localSchedules.map(slot =>
             (slot.giorno === giorno && slot.ora === ora)
-                ? { ...slot, email: email, nome: student ? student.studentName : (email === "" ? "" : email) }
+                ? {
+                    ...slot,
+                    email: email,
+                    nome: student ? student.studentName : (email === "" ? "" : email)
+                }
                 : slot
         );
         setLocalSchedules(updated);
         setHasChanges(true);
         setEditingSlot(null);
+    };
+
+    // --- LOGICHE DI MANIPOLAZIONE ORARI (Invariate ma integrate) ---
+    const getLessonsData = (targetDay) => {
+        return localSchedules
+            .filter(slot => slot.giorno === targetDay)
+            .sort((a, b) => a.ora.localeCompare(b.ora));
     };
 
     const handleClearFullDayLocal = () => {
@@ -157,36 +230,17 @@ export default function SchedulePage({ user }) {
         setOpenAddRowDialog(false);
     };
 
-    const saveFullDay = async () => {
-        setSaving(true);
-        try {
-            await fetch(APPS_SCRIPT_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                body: JSON.stringify({
-                    action: "saveFullSchedule",
-                    allSchedules: localSchedules
-                })
-            });
-            setHasChanges(false);
-            setSchedules(localSchedules);
-        } catch (e) {
-            console.error("Errore salvataggio:", e);
-        } finally {
-            setSaving(false);
-        }
-    };
-
+    // --- RENDERING ---
     return (
         <Box sx={{
             p: isMobile ? 1.5 : 3,
-            pb: isMobile ? 22 : 12, // Più spazio in fondo per i bottoni mobile
+            pb: isMobile ? 22 : 12,
             maxWidth: 650,
             mx: 'auto',
             bgcolor: '#f8f9fa',
             minHeight: '100vh'
         }}>
-
+            {/* Header */}
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
@@ -204,6 +258,7 @@ export default function SchedulePage({ user }) {
                 </ToggleButtonGroup>
             </Stack>
 
+            {/* Selettore Giorno */}
             {viewMode === 'giorno' && (
                 <Box sx={{
                     display: 'flex',
@@ -256,14 +311,13 @@ export default function SchedulePage({ user }) {
                                         const isEditing = editingSlot === `${slot.ora}-${currentDay}`;
 
                                         return (
-                                            <Card key={idx} elevation={0} sx={{
+                                            <Card key={`${currentDay}-${idx}`} elevation={0} sx={{
                                                 borderRadius: 4,
                                                 border: '1px solid',
                                                 borderColor: isEditing ? 'primary.main' : '#e0e0e0',
                                                 boxShadow: isEditing ? '0 4px 12px rgba(25, 118, 210, 0.12)' : 'none'
                                             }}>
                                                 <Box sx={{ display: 'flex', minHeight: 70 }}>
-                                                    {/* Orario Box */}
                                                     <Box sx={{
                                                         bgcolor: isOccupied ? 'rgba(0,0,0,0.03)' : 'transparent',
                                                         p: 1,
@@ -284,12 +338,11 @@ export default function SchedulePage({ user }) {
                                                         </IconButton>
                                                     </Box>
 
-                                                    {/* Studente Area */}
                                                     <Box sx={{ p: 1, px: 2, flexGrow: 1, display: 'flex', alignItems: 'center' }}>
                                                         {isEditing ? (
                                                             <FormControl fullWidth size="small">
                                                                 <Select
-                                                                    value={slot.email}
+                                                                    value={slot.email || ""}
                                                                     onChange={(e) => handleUpdateLocalSlot(slot.ora, currentDay, e.target.value)}
                                                                     autoOpen
                                                                     sx={{ borderRadius: 3 }}
@@ -351,7 +404,7 @@ export default function SchedulePage({ user }) {
                 </Box>
             )}
 
-            {/* Azioni Mobile Bar */}
+            {/* Mobile Footer Buttons */}
             <Paper elevation={10} sx={{
                 position: 'fixed',
                 bottom: 0,
@@ -360,7 +413,8 @@ export default function SchedulePage({ user }) {
                 p: 2,
                 borderRadius: '24px 24px 0 0',
                 zIndex: theme.zIndex.appBar,
-                display: isMobile ? 'block' : 'none'
+                display: isMobile ? 'block' : 'none',
+                bgcolor: 'white'
             }}>
                 <Stack spacing={1.5}>
                     <Stack direction="row" spacing={2}>
@@ -379,7 +433,7 @@ export default function SchedulePage({ user }) {
                             variant="text"
                             color="error"
                             onClick={() => setOpenConfirmClearWeek(true)}
-                            sx={{ borderRadius: 4, py: 1, fontSize: '0.7rem' }}
+                            sx={{ borderRadius: 4, py: 1, fontSize: '0.75rem' }}
                         >
                             Reset Totale
                         </Button>
@@ -387,7 +441,7 @@ export default function SchedulePage({ user }) {
                 </Stack>
             </Paper>
 
-            {/* Azioni Desktop (Normali) */}
+            {/* Desktop Toolbar */}
             {!isMobile && (
                 <Box sx={{ mt: 4, textAlign: 'center' }}>
                     <Stack direction="row" spacing={2} justifyContent="center">
@@ -398,7 +452,7 @@ export default function SchedulePage({ user }) {
                 </Box>
             )}
 
-            {/* DIALOGS - ottimizzati per larghezza mobile */}
+            {/* Modals */}
             <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Totale?</DialogTitle>
                 <DialogContent><Typography textAlign="center">Svuoterai tutta la settimana locale. Procedere?</Typography></DialogContent>
@@ -443,7 +497,7 @@ export default function SchedulePage({ user }) {
                 </DialogActions>
             </Dialog>
 
-            {/* FLOATING SAVE BUTTON */}
+            {/* Floating Save FAB */}
             <Zoom in={hasChanges}>
                 <Box sx={{ position: 'fixed', bottom: isMobile ? 90 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare?")) { setLocalSchedules(schedules); setHasChanges(false); } }}>

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { googleLogout } from '@react-oauth/google';
 import Cookies from 'js-cookie';
 import {
     Grid, Paper, Typography, Box, CircularProgress,
     List, ListItem, ListItemText, ListItemIcon, Card,
-    Avatar, useTheme, useMediaQuery, Badge, Button, IconButton
+    Avatar, useTheme, useMediaQuery, Badge, Button, IconButton, Stack
 } from '@mui/material';
 import GroupIcon from '@mui/icons-material/Group';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
@@ -14,91 +14,103 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { APPS_SCRIPT_URL } from "./config/config";
 
-export default function DashboardInsegnante({ user }) {
+export default function DashboardInsegnante() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
     const navigate = useNavigate();
 
+    // 1. Inizializziamo l'utente leggendo direttamente il cookie (più sicuro delle prop)
+    const [userData] = useState(() => {
+        const session = Cookies.get('user_session');
+        return session ? JSON.parse(session) : null;
+    });
+
     const [subscribers, setSubscribers] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    // Funzione di Logout
-    const handleLogout = () => {
+    const handleLogout = useCallback(() => {
         googleLogout();
         Cookies.remove('user_session');
         navigate('/login', { replace: true });
-    };
+    }, [navigate]);
+
+    // 2. Fetch iscritti con Token di autenticazione
+    const fetchSubscribers = useCallback(async () => {
+        if (!userData?.id_token) return;
+
+        setLoading(true);
+        try {
+            // Inviamo teacherId (che è userData.sub) e il token per la verifica backend
+            const url = `${APPS_SCRIPT_URL}?action=getTeacherSubscribers` +
+                `&teacherId=${userData.sub}` +
+                `&token=${userData.id_token}`;
+
+            const res = await fetch(url);
+            const result = await res.json();
+
+            if (result.status === "success") {
+                setSubscribers(result.data);
+            } else if (result.message?.includes("autorizzato")) {
+                handleLogout(); // Sessione scaduta
+            }
+        } catch (error) {
+            console.error("Errore recupero iscritti:", error);
+        } finally {
+            setLoading(false);
+        }
+    }, [userData, handleLogout]);
 
     useEffect(() => {
-        const fetchSubscribers = async () => {
-            try {
-                const res = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${user.sub}`);
-                const result = await res.json();
-                if (result.status === "success") {
-                    setSubscribers(result.data);
-                }
-            } catch (error) {
-                console.error("Errore recupero iscritti:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
         fetchSubscribers();
-    }, [user.sub]);
+    }, [fetchSubscribers]);
+
+    // 3. Protezione Rendering
+    if (!userData) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}>
+                <CircularProgress />
+            </Box>
+        );
+    }
 
     return (
-        <Box sx={{ p: isMobile ? 1 : 3, pb: 5 }}>
+        <Box sx={{ p: isMobile ? 2 : 3, pb: 5, maxWidth: 1200, mx: 'auto' }}>
 
-            {/* Header Profilo con Logout Integrato */}
+            {/* Header Profilo */}
             <Box sx={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                mb: 4,
-                mt: isMobile ? 2 : 0
+                mb: 4
             }}>
-                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <Stack direction="row" spacing={2} alignItems="center">
                     <Badge
                         overlap="circular"
                         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                         badgeContent={<Box sx={{ width: 14, height: 14, bgcolor: 'success.main', borderRadius: '50%', border: '2px solid white' }} />}
                     >
                         <Avatar
-                            src={user.picture}
+                            src={userData.picture}
                             sx={{ width: isMobile ? 60 : 70, height: isMobile ? 60 : 70, boxShadow: 3 }}
                         />
                     </Badge>
-                    <Box sx={{ ml: 2 }}>
+                    <Box>
                         <Typography variant={isMobile ? "h6" : "h5"} fontWeight="bold">
-                            Prof. {user.family_name}
+                            Prof. {userData.family_name}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                            Insegnante
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            Insegnante • {userData.email}
                         </Typography>
                     </Box>
-                </Box>
+                </Stack>
 
-                {/* Tasto Logout */}
-                {isMobile ? (
-                    <IconButton color="error" onClick={handleLogout} sx={{ bgcolor: 'error.lighter' }}>
-                        <LogoutIcon />
-                    </IconButton>
-                ) : (
-                    <Button
-                        variant="outlined"
-                        color="error"
-                        startIcon={<LogoutIcon />}
-                        onClick={handleLogout}
-                        sx={{ borderRadius: 2, textTransform: 'none' }}
-                    >
-                        Esci
-                    </Button>
-                )}
+                <IconButton color="error" onClick={handleLogout} sx={{ bgcolor: 'rgba(211, 47, 47, 0.05)' }}>
+                    <LogoutIcon />
+                </IconButton>
             </Box>
 
-            <Grid container spacing={isMobile ? 2 : 3}>
-
-                {/* CARD STATISTICA */}
+            <Grid container spacing={3}>
+                {/* CARD STUDENTI TOTALI */}
                 <Grid item xs={12} md={4}>
                     <Paper
                         elevation={0}
@@ -107,10 +119,10 @@ export default function DashboardInsegnante({ user }) {
                             borderRadius: 4,
                             bgcolor: 'primary.main',
                             color: 'white',
-                            minHeight: 110,
                             display: 'flex',
                             flexDirection: 'column',
-                            justifyContent: 'center'
+                            justifyContent: 'center',
+                            height: '100%'
                         }}
                     >
                         <Typography variant="subtitle2" sx={{ opacity: 0.8 }}>Studenti Iscritti</Typography>
@@ -128,27 +140,24 @@ export default function DashboardInsegnante({ user }) {
                         startIcon={<CalendarMonthIcon />}
                         endIcon={<ChevronRightIcon />}
                         sx={{
-                            height: '100%',
-                            minHeight: 80,
+                            py: 3,
                             borderRadius: 4,
                             fontSize: '1.1rem',
                             fontWeight: 'bold',
                             textTransform: 'none',
-                            boxShadow: '0 8px 20px rgba(156, 39, 176, 0.2)',
+                            boxShadow: 4,
                         }}
                     >
-                        Aggiorna Orari Studenti
+                        Gestisci e Aggiorna Orari
                     </Button>
                 </Grid>
 
                 {/* REGISTRO STUDENTI */}
                 <Grid item xs={12}>
                     <Card elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: 'divider' }}>
-                        <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                                <GroupIcon sx={{ mr: 1, color: 'primary.main' }} />
-                                <Typography variant="h6" fontWeight="bold">Registro Studenti</Typography>
-                            </Box>
+                        <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center' }}>
+                            <GroupIcon sx={{ mr: 1, color: 'primary.main' }} />
+                            <Typography variant="h6" fontWeight="bold">Registro Studenti</Typography>
                         </Box>
 
                         {loading ? (
@@ -164,24 +173,24 @@ export default function DashboardInsegnante({ user }) {
                                         sx={{ py: 2 }}
                                     >
                                         <ListItemIcon>
-                                            <Avatar sx={{ bgcolor: theme.palette.primary.main, fontWeight: 'bold' }}>
+                                            <Avatar sx={{ bgcolor: 'primary.light', color: 'primary.main', fontWeight: 'bold' }}>
                                                 {student.studentName ? student.studentName.charAt(0).toUpperCase() : 'S'}
                                             </Avatar>
                                         </ListItemIcon>
                                         <ListItemText
                                             primary={<Typography fontWeight="bold">{student.studentName}</Typography>}
                                             secondary={
-                                                <Box component="span">
-                                                    <Typography variant="caption" display="block" color="text.secondary">
+                                                <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                                                    <Typography variant="caption" color="text.secondary">
                                                         {student.studentEmail}
                                                     </Typography>
-                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+                                                    <Stack direction="row" spacing={0.5} alignItems="center">
                                                         <SyncIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
                                                         <Typography variant="caption" color="text.disabled">
                                                             Iscritto: {new Date(student.date).toLocaleDateString()}
                                                         </Typography>
-                                                    </Box>
-                                                </Box>
+                                                    </Stack>
+                                                </Stack>
                                             }
                                         />
                                     </ListItem>
@@ -189,7 +198,7 @@ export default function DashboardInsegnante({ user }) {
                             </List>
                         ) : (
                             <Box sx={{ p: 5, textAlign: 'center' }}>
-                                <Typography color="text.secondary">Nessuno studente iscritto.</Typography>
+                                <Typography color="text.secondary">Nessuno studente iscritto ai tuoi corsi.</Typography>
                             </Box>
                         )}
                     </Card>
