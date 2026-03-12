@@ -8,46 +8,72 @@ import DashboardInsegnante from './components/DashboardInsegnante';
 import DashboardStudente from './components/DashboardStudente';
 import SchedulePage from "./components/SchedulePage";
 import StudentSchedulePage from "./components/StudentSchedulePage";
+import StudentsManagementPage from "./components/StudentManagementPage";
 
-// 1. Layout protetto: gestisce il controllo sessione una volta sola
-const DashboardLayout = () => {
+// --- 1. HELPER SESSIONE ---
+const getSession = () => {
     const sessionCookie = Cookies.get('user_session');
+    if (!sessionCookie) return null;
+    try {
+        return JSON.parse(sessionCookie);
+    } catch (e) {
+        return null;
+    }
+};
 
-    if (!sessionCookie) {
+// --- 2. PROTEZIONE RUOLI (Guardia di rotta) ---
+const RoleBasedRoute = ({ allowedRole, children }) => {
+    const session = getSession();
+
+    // Se non c'è sessione, vai al login
+    if (!session) return <Navigate to="/login" replace />;
+
+    // Se il ruolo non è quello permesso, torna alla dashboard principale
+    if (session.role !== allowedRole) {
+        return <Navigate to="/dashboard" replace />;
+    }
+
+    return children;
+};
+
+// --- 3. LAYOUT PROTETTO ---
+const DashboardLayout = () => {
+    const session = getSession();
+
+    if (!session) {
         return <Navigate to="/login" replace />;
     }
 
     return (
         <Box sx={{ minHeight: '100vh', bgcolor: '#f5f5f5' }}>
-            {/* Outlet renderizzerà o DashboardHome o SchedulePageWrapper */}
             <Outlet />
         </Box>
     );
 };
 
-// 2. Componente per la rotta "/" di /dashboard
-const DashboardHome = () => {
-    const sessionCookie = Cookies.get('user_session');
-    if (!sessionCookie) return <Navigate to="/login" replace />;
+// --- 4. COMPONENTI WRAPPER ---
 
-    const session = JSON.parse(sessionCookie);
+// Home della Dashboard: smista tra Insegnante e Studente
+const DashboardHome = () => {
+    const session = getSession();
+    if (!session) return <Navigate to="/login" replace />;
+
     return session.role === 'Insegnante'
-        ? <DashboardInsegnante user={session} />
-        : <DashboardStudente />; // DashboardStudente recupererà i dati dal cookie internamente
+        ? <DashboardInsegnante />
+        : <DashboardStudente />;
 };
 
-// 3. Wrapper specifico per differenziare l'agenda
+// Agenda: smista tra Insegnante (Modifica) e Studente (Visualizzazione)
 const SchedulePageWrapper = () => {
-    const sessionCookie = Cookies.get('user_session');
-    if (!sessionCookie) return <Navigate to="/login" replace />;
-
-    const session = JSON.parse(sessionCookie);
+    const session = getSession();
+    if (!session) return <Navigate to="/login" replace />;
 
     return session.role === 'Insegnante'
-        ? <SchedulePage user={session} />
+        ? <SchedulePage />
         : <StudentSchedulePage />;
 };
 
+// --- 5. COMPONENTE APP PRINCIPALE ---
 function App() {
     return (
         <Router>
@@ -57,11 +83,22 @@ function App() {
 
                 {/* Rotte Protette */}
                 <Route path="/dashboard" element={<DashboardLayout />}>
-                    {/* Questo renderizza DashboardInsegnante o DashboardStudente a /dashboard */}
+
+                    {/* Home della Dashboard (Accessibile a entrambi) */}
                     <Route index element={<DashboardHome />} />
 
-                    {/* Questo renderizza SchedulePage o StudentSchedulePage a /dashboard/schedule */}
+                    {/* Gestione Agenda (Accessibile a entrambi, logica interna diversa) */}
                     <Route path="schedule" element={<SchedulePageWrapper />} />
+
+                    {/* Gestione Studenti (SOLO INSEGNANTE) */}
+                    <Route
+                        path="students"
+                        element={
+                            <RoleBasedRoute allowedRole="Insegnante">
+                                <StudentsManagementPage />
+                            </RoleBasedRoute>
+                        }
+                    />
                 </Route>
 
                 {/* Redirect di fallback */}

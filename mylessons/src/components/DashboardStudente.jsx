@@ -20,7 +20,6 @@ export default function DashboardStudente() {
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
     const navigate = useNavigate();
 
-    // 1. Recupero immediato dei dati utente dal cookie per evitare il crash "undefined"
     const [userData] = useState(() => {
         const session = Cookies.get('user_session');
         return session ? JSON.parse(session) : null;
@@ -33,14 +32,18 @@ export default function DashboardStudente() {
     const [submitting, setSubmitting] = useState(false);
     const [status, setStatus] = useState({ type: '', msg: '' });
 
-    // Funzione di Logout
+    // --- FILTRAGGIO INSEGNANTI ---
+    // Filtriamo la lista degli insegnanti escludendo quelli a cui lo studente è già iscritto
+    const availableTeachers = teachers.filter(t =>
+        !mySubscriptions.some(sub => sub.teacherId === t.id)
+    );
+
     const handleLogout = useCallback(() => {
         googleLogout();
         Cookies.remove('user_session');
         navigate('/login', { replace: true });
     }, [navigate]);
 
-    // 2. Caricamento dati protetto da Token
     const loadDashboardData = useCallback(async () => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) {
@@ -51,7 +54,6 @@ export default function DashboardStudente() {
 
         setLoading(true);
         try {
-            // Passiamo il token certificato per le iscrizioni
             const [resT, resS] = await Promise.all([
                 fetch(`${APPS_SCRIPT_URL}?action=getTeachers`),
                 fetch(`${APPS_SCRIPT_URL}?action=getMySubscriptions&token=${session.id_token}`)
@@ -63,7 +65,6 @@ export default function DashboardStudente() {
             if (dataT.status === "success") setTeachers(dataT.data);
             if (dataS.status === "success") setMySubscriptions(dataS.data);
 
-            // Se il token è scaduto (errore dal backend)
             if (dataS.status === "error" && dataS.message?.includes("autorizzato")) {
                 handleLogout();
             }
@@ -78,14 +79,19 @@ export default function DashboardStudente() {
         loadDashboardData();
     }, [loadDashboardData]);
 
-    // 3. Funzione per iscriversi a un corso (Protetta)
     const handleSubscribe = async () => {
         if (!selectedTeacher || !userData?.id_token) return;
+
+        // Validazione di sicurezza lato client: evita invii doppi se la lista non si è ancora aggiornata
+        if (mySubscriptions.some(sub => sub.teacherId === selectedTeacher.id)) {
+            setStatus({ type: 'error', msg: 'Sei già iscritto a questo corso!' });
+            return;
+        }
+
         setSubmitting(true);
         setStatus({ type: '', msg: '' });
 
         try {
-            // Nota: Usiamo POST con il token nel body
             await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
                 mode: 'no-cors',
@@ -99,10 +105,10 @@ export default function DashboardStudente() {
                 }),
             });
 
-            setStatus({ type: 'success', msg: `Richiesta inviata al Prof. ${selectedTeacher.name}!` });
+            setStatus({ type: 'success', msg: `Iscrizione completata con il Prof. ${selectedTeacher.name}!` });
             setSelectedTeacher('');
-            // Refresh dei dati
-            setTimeout(() => loadDashboardData(), 1500);
+            // Refresh per aggiornare la lista delle iscrizioni e far sparire il docente dalla tendina
+            setTimeout(() => loadDashboardData(), 1000);
         } catch (error) {
             setStatus({ type: 'error', msg: 'Errore durante l\'iscrizione.' });
         } finally {
@@ -110,7 +116,6 @@ export default function DashboardStudente() {
         }
     };
 
-    // Protezione Rendering: se il cookie è assente o in fase di lettura
     if (!userData) {
         return (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
@@ -122,15 +127,12 @@ export default function DashboardStudente() {
 
     return (
         <Box sx={{ p: isMobile ? 1.5 : 3, pb: 10, maxWidth: 1000, mx: 'auto' }}>
-
-            {/* Header con Saluto e Logout */}
+            {/* Header */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 4 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
                     <Avatar src={userData.picture} sx={{ width: 60, height: 60, mr: 2, boxShadow: 3, border: '2px solid white' }} />
                     <Box>
-                        <Typography variant={isMobile ? "h5" : "h4"} fontWeight="bold">
-                            Ciao, {userData.given_name}
-                        </Typography>
+                        <Typography variant={isMobile ? "h5" : "h4"} fontWeight="bold">Ciao, {userData.given_name}</Typography>
                         <Typography variant="body2" color="text.secondary" fontWeight="medium">Account Studente</Typography>
                     </Box>
                 </Box>
@@ -140,8 +142,7 @@ export default function DashboardStudente() {
             </Box>
 
             <Grid container spacing={3}>
-
-                {/* SEZIONE AGENDA: Accesso rapido agli orari */}
+                {/* Agenda */}
                 <Grid item xs={12}>
                     <Card
                         onClick={() => navigate('/dashboard/schedule')}
@@ -152,19 +153,17 @@ export default function DashboardStudente() {
                         }}
                     >
                         <Stack direction="row" alignItems="center" spacing={2}>
-                            <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)', width: 50, height: 50 }}>
-                                <CalendarMonthIcon fontSize="large" />
-                            </Avatar>
+                            <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)', width: 50, height: 50 }}><CalendarMonthIcon fontSize="large" /></Avatar>
                             <Box>
                                 <Typography variant="h6" fontWeight="bold">Il Mio Orario Personale</Typography>
-                                <Typography variant="body2" sx={{ opacity: 0.9 }}>Visualizza le tue lezioni confermate e la tua agenda</Typography>
+                                <Typography variant="body2" sx={{ opacity: 0.9 }}>Visualizza le tue lezioni confermate</Typography>
                             </Box>
                         </Stack>
                         {!isMobile && <Button variant="contained" color="inherit" sx={{ color: 'secondary.main', fontWeight: 'bold' }}>Apri Agenda</Button>}
                     </Card>
                 </Grid>
 
-                {/* I MIEI INSEGNANTI */}
+                {/* Lista Corsi Attivi */}
                 <Grid item xs={12} md={6}>
                     <Card elevation={0} sx={{ borderRadius: 5, border: '1px solid', borderColor: 'divider', minHeight: 350 }}>
                         <Box sx={{ p: 2.5, bgcolor: 'primary.main', color: 'white' }}>
@@ -180,9 +179,7 @@ export default function DashboardStudente() {
                                     {mySubscriptions.map((sub, index) => (
                                         <React.Fragment key={index}>
                                             <ListItem sx={{ py: 2 }}>
-                                                <ListItemIcon>
-                                                    <Avatar sx={{ bgcolor: 'primary.light', color: 'primary.main' }}><SchoolIcon /></Avatar>
-                                                </ListItemIcon>
+                                                <ListItemIcon><Avatar sx={{ bgcolor: 'primary.light', color: 'primary.main' }}><SchoolIcon /></Avatar></ListItemIcon>
                                                 <ListItemText
                                                     primary={<Typography fontWeight="bold">Prof. {sub.teacherName}</Typography>}
                                                     secondary={`Iscritto il: ${new Date(sub.date).toLocaleDateString()}`}
@@ -193,41 +190,41 @@ export default function DashboardStudente() {
                                     ))}
                                 </List>
                             ) : (
-                                <Box sx={{ p: 6, textAlign: 'center' }}>
-                                    <Typography color="text.secondary" variant="body2">Nessun insegnante associato.</Typography>
-                                </Box>
+                                <Box sx={{ p: 6, textAlign: 'center' }}><Typography color="text.secondary">Nessun insegnante associato.</Typography></Box>
                             )}
                         </Box>
                     </Card>
                 </Grid>
 
-                {/* MODULO ISCRIZIONE */}
+                {/* Modulo Nuova Iscrizione */}
                 <Grid item xs={12} md={6}>
-                    <Paper elevation={0} sx={{ p: 4, borderRadius: 5, border: '1px solid', borderColor: 'divider', bgcolor: 'grey.50', height: '100%', boxSizing: 'border-box' }}>
+                    <Paper elevation={0} sx={{ p: 4, borderRadius: 5, border: '1px solid', borderColor: 'divider', bgcolor: 'grey.50', height: '100%' }}>
                         <Typography variant="h6" gutterBottom fontWeight="bold" sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                            <PersonAddIcon sx={{ mr: 1, color: 'primary.main' }} /> Iscriviti a un nuovo corso
+                            <PersonAddIcon sx={{ mr: 1, color: 'primary.main' }} /> Nuova Iscrizione
                         </Typography>
 
-                        {status.msg && (
-                            <Alert severity={status.type} sx={{ mb: 3, borderRadius: 3 }}>{status.msg}</Alert>
-                        )}
+                        {status.msg && <Alert severity={status.type} sx={{ mb: 3, borderRadius: 3 }}>{status.msg}</Alert>}
 
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                            Seleziona il docente per richiedere l'inserimento nel corso e visualizzare il suo calendario.
+                            Seleziona un insegnante dalla lista. Sono mostrati solo i docenti a cui non sei ancora iscritto.
                         </Typography>
 
                         <FormControl fullWidth sx={{ mb: 3, bgcolor: 'white' }}>
-                            <InputLabel>Lista Insegnanti Disponibili</InputLabel>
+                            <InputLabel>Insegnanti disponibili</InputLabel>
                             <Select
                                 value={selectedTeacher}
-                                label="Lista Insegnanti Disponibili"
+                                label="Insegnanti disponibili"
                                 onChange={(e) => setSelectedTeacher(e.target.value)}
-                                disabled={submitting}
+                                disabled={submitting || loading}
                                 sx={{ borderRadius: 3 }}
                             >
-                                {teachers.map((t) => (
-                                    <MenuItem key={t.id} value={t}>Prof. {t.name}</MenuItem>
-                                ))}
+                                {availableTeachers.length > 0 ? (
+                                    availableTeachers.map((t) => (
+                                        <MenuItem key={t.id} value={t}>Prof. {t.name}</MenuItem>
+                                    ))
+                                ) : (
+                                    <MenuItem disabled>Tutti i docenti sono già nei tuoi corsi</MenuItem>
+                                )}
                             </Select>
                         </FormControl>
 
@@ -236,10 +233,10 @@ export default function DashboardStudente() {
                             fullWidth
                             size="large"
                             onClick={handleSubscribe}
-                            disabled={!selectedTeacher || submitting}
-                            sx={{ borderRadius: 4, py: 1.8, textTransform: 'none', fontWeight: 'bold', boxShadow: 3 }}
+                            disabled={!selectedTeacher || submitting || availableTeachers.length === 0}
+                            sx={{ borderRadius: 4, py: 1.8, fontWeight: 'bold' }}
                         >
-                            {submitting ? <CircularProgress size={24} color="inherit" /> : "Invia Richiesta Iscrizione"}
+                            {submitting ? <CircularProgress size={24} color="inherit" /> : "Conferma Iscrizione"}
                         </Button>
                     </Paper>
                 </Grid>

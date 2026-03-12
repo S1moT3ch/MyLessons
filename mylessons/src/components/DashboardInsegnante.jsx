@@ -109,7 +109,7 @@ export default function DashboardInsegnante() {
                 </IconButton>
             </Box>
 
-            <Grid container spacing={3}>
+            <Grid container spacing={3} alignItems="stretch">
                 {/* CARD STUDENTI TOTALI */}
                 <Grid item xs={12} md={4}>
                     <Paper
@@ -122,7 +122,6 @@ export default function DashboardInsegnante() {
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'center',
-                            height: '100%'
                         }}
                     >
                         <Typography variant="subtitle2" sx={{ opacity: 0.8 }}>Studenti Iscritti</Typography>
@@ -149,6 +148,33 @@ export default function DashboardInsegnante() {
                         }}
                     >
                         Gestisci e Aggiorna Orari
+                    </Button>
+                </Grid>
+
+                {/* 3. NUOVO PULSANTE GESTIONE STUDENTI */}
+                <Grid item xs={12} sm={6} md={4}>
+                    <Button
+                        variant="contained"
+                        color="info" // Colore azzurro per differenziarlo
+                        fullWidth
+                        onClick={() => navigate('/dashboard/students')}
+                        startIcon={<GroupIcon />}
+                        sx={{
+                            minHeight: 120,
+                            borderRadius: 4,
+                            fontSize: '1rem',
+                            fontWeight: 'bold',
+                            textTransform: 'none',
+                            boxShadow: 4,
+                            bgcolor: '#0288d1', // Tonalità di blu specifica
+                            '&:hover': { bgcolor: '#01579b' },
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 1
+                        }}
+                    >
+                        Gestisci Studenti
+                        <ChevronRightIcon sx={{ opacity: 0.5 }} />
                     </Button>
                 </Grid>
 
