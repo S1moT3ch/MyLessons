@@ -4,8 +4,8 @@ import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import { jwtDecode } from "jwt-decode";
 import Cookies from 'js-cookie';
 import {
-    Container, Box, Card, CardContent, Typography, Avatar, Button,
-    Paper, Radio, RadioGroup, FormControlLabel, FormControl, FormLabel, Divider,
+    Container, Box, Card, Typography, Avatar, Button,
+    Paper, Radio, RadioGroup, FormControlLabel, FormControl, Divider,
     CircularProgress // Aggiunto per il feedback visivo
 } from '@mui/material';
 import { APPS_SCRIPT_URL } from "./config/config";

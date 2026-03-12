@@ -5,7 +5,7 @@ import Cookies from 'js-cookie';
 import {
     Grid, Paper, Typography, Box, CircularProgress,
     List, ListItem, ListItemText, ListItemIcon, Card,
-    Avatar, useTheme, useMediaQuery, Badge, Button, IconButton, Tooltip
+    Avatar, useTheme, useMediaQuery, Badge, Button, IconButton
 } from '@mui/material';
 import GroupIcon from '@mui/icons-material/Group';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';

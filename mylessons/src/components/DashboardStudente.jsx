@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { googleLogout } from '@react-oauth/google';
 import Cookies from 'js-cookie';
 import {
     Grid, Paper, Typography, Box, Button, FormControl,
-    InputLabel, Select, MenuItem, Divider, Alert, CircularProgress,
+    InputLabel, Select, MenuItem, Alert, CircularProgress,
     List, ListItem, ListItemText, ListItemIcon, Card, Avatar,
     useTheme, useMediaQuery, IconButton
 } from '@mui/material';
@@ -34,7 +34,7 @@ export default function DashboardStudente({ user }) {
     };
 
     // Caricamento dati iniziali
-    const loadDashboardData = async () => {
+    const loadDashboardData = useCallback(async () => {
         setLoading(true);
         try {
             const [resT, resS] = await Promise.all([
@@ -51,9 +51,12 @@ export default function DashboardStudente({ user }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [user.email]);
 
-    useEffect(() => { loadDashboardData(); }, [user.email]);
+    // Correzione Line 56
+    useEffect(() => {
+        loadDashboardData();
+    }, [loadDashboardData]);
 
     // Funzione per iscriversi a un corso
     const handleSubscribe = async () => {
