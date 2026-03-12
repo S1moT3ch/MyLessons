@@ -21,7 +21,7 @@ export default function DashboardStudente() {
     const navigate = useNavigate();
 
     // 1. Recupero immediato dei dati utente dal cookie per evitare il crash "undefined"
-    const [userData, setUserData] = useState(() => {
+    const [userData] = useState(() => {
         const session = Cookies.get('user_session');
         return session ? JSON.parse(session) : null;
     });
