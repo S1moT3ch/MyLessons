@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     Box, Typography, Paper, CircularProgress, IconButton,
     Card, Stack, Chip, Avatar, useTheme, useMediaQuery,
     ToggleButton, ToggleButtonGroup, Button, Dialog,
     DialogTitle, DialogContent, DialogActions, FormControl,
-    InputLabel, Select, MenuItem, TextField, Fab, Zoom
+    Select, MenuItem, TextField, Fab, Zoom
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AccessTimeFilledIcon from '@mui/icons-material/AccessTimeFilled';
@@ -13,6 +13,8 @@ import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import AddIcon from '@mui/icons-material/Add';
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useNavigate } from 'react-router-dom';
 import { APPS_SCRIPT_URL } from "./config/config";
 
@@ -35,7 +37,6 @@ export default function SchedulePage({ user }) {
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
 
-    // schedules è il database reale, localSchedules è il buffer di lavoro
     const [schedules, setSchedules] = useState([]);
     const [localSchedules, setLocalSchedules] = useState([]);
     const [subscribers, setSubscribers] = useState([]);
@@ -46,19 +47,18 @@ export default function SchedulePage({ user }) {
         new Date().toLocaleDateString('it-IT', { weekday: 'long' }).slice(1)
     );
 
-    const [openDialog, setOpenDialog] = useState(false);
-    const [openConfirmClear, setOpenConfirmClear] = useState(false);
+    const [editingSlot, setEditingSlot] = useState(null);
+    const [openConfirmClearDay, setOpenConfirmClearDay] = useState(false);
+    const [openConfirmClearWeek, setOpenConfirmClearWeek] = useState(false);
     const [openTimeDialog, setOpenTimeDialog] = useState(false);
     const [openAddRowDialog, setOpenAddRowDialog] = useState(false);
 
-    const [selectedSlot, setSelectedSlot] = useState({ ora: '', giorno: '' });
     const [timeData, setTimeData] = useState({ old: '', new: '' });
     const [newTimeLabel, setNewTimeLabel] = useState('09:00');
-    const [selectedStudent, setSelectedStudent] = useState('');
 
     const giorni = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true);
         try {
             const [resSched, resSubs] = await Promise.all([
@@ -78,47 +78,54 @@ export default function SchedulePage({ user }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [user.sub]);
 
-    useEffect(() => { fetchData(); }, [user.sub]);
+    useEffect(() => {
+        fetchData();
+    }, [fetchData]);
 
-    // Filtra e ordina i dati dallo stato LOCALE
     const getLessonsData = (targetDay) => {
         return localSchedules
             .filter(slot => slot.giorno === targetDay)
-            .sort((a, b) => a.ora.localeCompare(b.ora))
-            .map(slot => ({
-                ora: slot.ora,
-                studenti: slot.email ? [{ email: slot.email, nome: slot.nome }] : []
-            }));
+            .sort((a, b) => a.ora.localeCompare(b.ora));
     };
-
-    // --- LOGICA BUFFER LOCALE (Nessuna fetch qui) ---
 
     const handleUpdateLocalSlot = (ora, giorno, email) => {
         const student = subscribers.find(s => s.studentEmail === email);
         const updated = localSchedules.map(slot =>
             (slot.giorno === giorno && slot.ora === ora)
-                ? { ...slot, email: email, nome: student ? student.studentName : email }
+                ? { ...slot, email: email, nome: student ? student.studentName : (email === "" ? "" : email) }
                 : slot
         );
         setLocalSchedules(updated);
         setHasChanges(true);
-        setOpenDialog(false);
-        setOpenConfirmClear(false);
+        setEditingSlot(null);
+    };
+
+    const handleClearFullDayLocal = () => {
+        const updated = localSchedules.map(slot =>
+            slot.giorno === filterDay ? { ...slot, email: "", nome: "" } : slot
+        );
+        setLocalSchedules(updated);
+        setHasChanges(true);
+        setOpenConfirmClearDay(false);
+    };
+
+    const handleClearEntireWeekLocal = () => {
+        const updated = localSchedules.map(slot => ({ ...slot, email: "", nome: "" }));
+        setLocalSchedules(updated);
+        setHasChanges(true);
+        setOpenConfirmClearWeek(false);
     };
 
     const handleUpdateLocalTime = () => {
         const dayLessons = getLessonsData(filterDay);
         const isFirstRow = dayLessons.length > 0 && dayLessons[0].ora === timeData.old;
-
         let [ore, minuti] = timeData.new.split(':').map(Number);
         let startUpdating = false;
 
         const updated = localSchedules.map(slot => {
             if (slot.giorno !== filterDay) return slot;
-
-            // Se è la prima riga, attiviamo la cascata locale
             if (isFirstRow) {
                 if (slot.ora === timeData.old) startUpdating = true;
                 if (startUpdating) {
@@ -127,7 +134,6 @@ export default function SchedulePage({ user }) {
                     return { ...slot, ora: newOra };
                 }
             } else {
-                // Modifica singola se non è la prima riga
                 if (slot.ora === timeData.old) return { ...slot, ora: timeData.new };
             }
             return slot;
@@ -143,12 +149,7 @@ export default function SchedulePage({ user }) {
         const newSlots = [];
         for (let i = 0; i < 6; i++) {
             const oraFormattata = `${String(ore).padStart(2, '0')}:${String(minuti).padStart(2, '0')}`;
-            newSlots.push({
-                giorno: filterDay,
-                ora: oraFormattata,
-                email: "",
-                nome: ""
-            });
+            newSlots.push({ giorno: filterDay, ora: oraFormattata, email: "", nome: "" });
             ore = (ore + 1) % 24;
         }
         setLocalSchedules([...localSchedules, ...newSlots]);
@@ -156,25 +157,18 @@ export default function SchedulePage({ user }) {
         setOpenAddRowDialog(false);
     };
 
-    // --- SALVATAGGIO FINALE SUL DATABASE ---
-
     const saveFullDay = async () => {
         setSaving(true);
-        const dayData = localSchedules.filter(s => s.giorno === filterDay);
-
         try {
             await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
                 mode: 'no-cors',
                 body: JSON.stringify({
-                    action: "saveFullDay",
-                    giorno: filterDay,
-                    lessons: dayData.map(d => ({ ora: d.ora, email: d.email }))
+                    action: "saveFullSchedule",
+                    allSchedules: localSchedules
                 })
             });
             setHasChanges(false);
-            // Non facciamo fetchData per non perdere la fluidità,
-            // ma aggiorniamo lo stato "reale" con quello "locale"
             setSchedules(localSchedules);
         } catch (e) {
             console.error("Errore salvataggio:", e);
@@ -184,37 +178,51 @@ export default function SchedulePage({ user }) {
     };
 
     return (
-        <Box sx={{ p: isMobile ? 1 : 3, pb: 12, maxWidth: 650, mx: 'auto' }}>
+        <Box sx={{
+            p: isMobile ? 1.5 : 3,
+            pb: isMobile ? 22 : 12, // Più spazio in fondo per i bottoni mobile
+            maxWidth: 650,
+            mx: 'auto',
+            bgcolor: '#f8f9fa',
+            minHeight: '100vh'
+        }}>
 
-            {/* Header */}
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                    <IconButton onClick={() => navigate(-1)}><ArrowBackIcon /></IconButton>
-                    <Typography variant="h5" fontWeight="bold">Agenda</Typography>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+                <Stack direction="row" alignItems="center" spacing={0.5}>
+                    <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
+                    <Typography variant="h5" fontWeight="800">Agenda</Typography>
                 </Stack>
                 <ToggleButtonGroup
                     value={viewMode}
                     exclusive
                     onChange={(e, next) => next && setViewMode(next)}
                     size="small"
+                    sx={{ bgcolor: 'white' }}
                 >
-                    <ToggleButton value="giorno">Giorno</ToggleButton>
-                    <ToggleButton value="settimana">Settimana</ToggleButton>
+                    <ToggleButton value="giorno" sx={{ px: 2 }}>Giorno</ToggleButton>
+                    <ToggleButton value="settimana" sx={{ px: 2 }}>Settimana</ToggleButton>
                 </ToggleButtonGroup>
             </Stack>
 
-            {/* Selettore Giorni */}
             {viewMode === 'giorno' && (
-                <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', mb: 3, pb: 1 }}>
+                <Box sx={{
+                    display: 'flex',
+                    gap: 1,
+                    overflowX: 'auto',
+                    mb: 3,
+                    pb: 1,
+                    '&::-webkit-scrollbar': { display: 'none' }
+                }}>
                     {giorni.map((g) => (
                         <Chip
                             key={g}
                             label={g}
                             clickable
-                            color={filterDay === g ? "secondary" : "default"}
+                            color={filterDay === g ? "primary" : "default"}
+                            variant={filterDay === g ? "filled" : "outlined"}
                             onClick={() => {
                                 if (hasChanges) {
-                                    if (window.confirm("Hai modifiche non salvate su questo giorno. Vuoi cambiare giorno e perdere le modifiche?")) {
+                                    if (window.confirm("Modifiche non salvate! Cambiando giorno le perderai.")) {
                                         setLocalSchedules(schedules);
                                         setHasChanges(false);
                                         setFilterDay(g);
@@ -223,13 +231,14 @@ export default function SchedulePage({ user }) {
                                     setFilterDay(g);
                                 }
                             }}
+                            sx={{ fontWeight: 'bold', px: 1 }}
                         />
                     ))}
                 </Box>
             )}
 
             {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}><CircularProgress /></Box>
+                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>
             ) : (
                 <Box>
                     {(viewMode === 'giorno' ? [filterDay] : giorni).map((currentDay) => {
@@ -238,39 +247,98 @@ export default function SchedulePage({ user }) {
 
                         return (
                             <Box key={currentDay} sx={{ mb: 4 }}>
-                                <Typography variant="h6" color="secondary" fontWeight="bold" sx={{ mb: 2, ml: 1 }}>{currentDay}</Typography>
-                                <Stack spacing={2}>
+                                <Typography variant="overline" color="text.secondary" fontWeight="900" sx={{ ml: 1, fontSize: '0.8rem' }}>
+                                    {currentDay.toUpperCase()}
+                                </Typography>
+                                <Stack spacing={1.5} sx={{ mt: 1 }}>
                                     {lessons.map((slot, idx) => {
-                                        const isOccupied = slot.studenti.length > 0;
+                                        const isOccupied = slot.email !== "";
+                                        const isEditing = editingSlot === `${slot.ora}-${currentDay}`;
+
                                         return (
-                                            <Card key={idx} sx={{ borderRadius: 3, border: '1px solid', borderColor: 'divider', borderStyle: isOccupied ? 'solid' : 'dashed' }}>
-                                                <Box sx={{ display: 'flex' }}>
-                                                    <Box sx={{ bgcolor: isOccupied ? 'grey.100' : 'transparent', p: 1.5, minWidth: 95, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid', borderColor: 'divider' }}>
-                                                        <Typography variant="subtitle2" fontWeight="bold">{slot.ora}</Typography>
-                                                        <IconButton size="small" onClick={() => { setTimeData({ old: slot.ora, new: slot.ora }); setOpenTimeDialog(true); }}>
-                                                            <AccessTimeFilledIcon sx={{ fontSize: 16 }} color="primary" />
+                                            <Card key={idx} elevation={0} sx={{
+                                                borderRadius: 4,
+                                                border: '1px solid',
+                                                borderColor: isEditing ? 'primary.main' : '#e0e0e0',
+                                                boxShadow: isEditing ? '0 4px 12px rgba(25, 118, 210, 0.12)' : 'none'
+                                            }}>
+                                                <Box sx={{ display: 'flex', minHeight: 70 }}>
+                                                    {/* Orario Box */}
+                                                    <Box sx={{
+                                                        bgcolor: isOccupied ? 'rgba(0,0,0,0.03)' : 'transparent',
+                                                        p: 1,
+                                                        minWidth: 75,
+                                                        display: 'flex',
+                                                        flexDirection: 'column',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        borderRight: '1px solid #eee'
+                                                    }}>
+                                                        <Typography variant="body2" fontWeight="800">{slot.ora}</Typography>
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={() => { setTimeData({ old: slot.ora, new: slot.ora }); setOpenTimeDialog(true); }}
+                                                            sx={{ color: theme.palette.text.disabled }}
+                                                        >
+                                                            <AccessTimeFilledIcon sx={{ fontSize: 16 }} />
                                                         </IconButton>
                                                     </Box>
-                                                    <Box sx={{ p: 1.5, flexGrow: 1 }}>
-                                                        <Stack spacing={1}>
-                                                            {isOccupied ? (
-                                                                slot.studenti.map((s, sIdx) => (
-                                                                    <Chip key={sIdx} avatar={<Avatar>{s.nome.charAt(0)}</Avatar>} label={s.nome} sx={{ bgcolor: getStudentColor(s.email), color: 'white', fontWeight: 'bold' }} />
-                                                                ))
-                                                            ) : (
-                                                                <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Slot Libero</Typography>
-                                                            )}
-                                                            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-                                                                <Button size="small" variant="outlined" startIcon={<EditIcon fontSize="small"/>} onClick={() => { setSelectedSlot({ ora: slot.ora, giorno: currentDay }); setSelectedStudent(isOccupied ? slot.studenti[0].email : ''); setOpenDialog(true); }}>
-                                                                    Modifica
-                                                                </Button>
-                                                                {isOccupied && (
-                                                                    <IconButton size="small" color="error" onClick={() => { setSelectedSlot({ ora: slot.ora, giorno: currentDay }); setOpenConfirmClear(true); }}>
-                                                                        <DeleteSweepIcon fontSize="small"/>
+
+                                                    {/* Studente Area */}
+                                                    <Box sx={{ p: 1, px: 2, flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+                                                        {isEditing ? (
+                                                            <FormControl fullWidth size="small">
+                                                                <Select
+                                                                    value={slot.email}
+                                                                    onChange={(e) => handleUpdateLocalSlot(slot.ora, currentDay, e.target.value)}
+                                                                    autoOpen
+                                                                    sx={{ borderRadius: 3 }}
+                                                                >
+                                                                    <MenuItem value=""><em>Libero</em></MenuItem>
+                                                                    {subscribers.map((sub) => (
+                                                                        <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem>
+                                                                    ))}
+                                                                </Select>
+                                                            </FormControl>
+                                                        ) : (
+                                                            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
+                                                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                                    {isOccupied ? (
+                                                                        <Chip
+                                                                            avatar={<Avatar sx={{ bgcolor: 'white !important', color: getStudentColor(slot.email) }}>{slot.nome?.charAt(0)}</Avatar>}
+                                                                            label={slot.nome}
+                                                                            sx={{
+                                                                                bgcolor: getStudentColor(slot.email),
+                                                                                color: 'white',
+                                                                                fontWeight: 'bold',
+                                                                                width: '100%',
+                                                                                justifyContent: 'flex-start',
+                                                                                '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.85rem' }
+                                                                            }}
+                                                                        />
+                                                                    ) : (
+                                                                        <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic', ml: 1 }}>Vuoto</Typography>
+                                                                    )}
+                                                                </Box>
+
+                                                                <Stack direction="row" spacing={0.5}>
+                                                                    <IconButton
+                                                                        onClick={() => setEditingSlot(`${slot.ora}-${currentDay}`)}
+                                                                        sx={{ bgcolor: 'rgba(25, 118, 210, 0.05)' }}
+                                                                    >
+                                                                        <EditIcon fontSize="small" color="primary" />
                                                                     </IconButton>
-                                                                )}
+                                                                    {isOccupied && (
+                                                                        <IconButton
+                                                                            onClick={() => handleUpdateLocalSlot(slot.ora, currentDay, "")}
+                                                                            sx={{ bgcolor: 'rgba(211, 47, 47, 0.05)' }}
+                                                                        >
+                                                                            <DeleteSweepIcon fontSize="small" color="error" />
+                                                                        </IconButton>
+                                                                    )}
+                                                                </Stack>
                                                             </Stack>
-                                                        </Stack>
+                                                        )}
                                                     </Box>
                                                 </Box>
                                             </Card>
@@ -280,75 +348,109 @@ export default function SchedulePage({ user }) {
                             </Box>
                         );
                     })}
-
-                    <Button fullWidth variant="contained" color="primary" startIcon={<AddIcon />} onClick={() => setOpenAddRowDialog(true)} sx={{ mt: 2, borderRadius: 3, py: 1.2 }}>
-                        Programma Giornata ({filterDay})
-                    </Button>
                 </Box>
             )}
 
-            {/* --- DIALOGS (Modificano solo lo stato locale) --- */}
+            {/* Azioni Mobile Bar */}
+            <Paper elevation={10} sx={{
+                position: 'fixed',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                p: 2,
+                borderRadius: '24px 24px 0 0',
+                zIndex: theme.zIndex.appBar,
+                display: isMobile ? 'block' : 'none'
+            }}>
+                <Stack spacing={1.5}>
+                    <Stack direction="row" spacing={2}>
+                        <Button
+                            fullWidth
+                            variant="outlined"
+                            color="error"
+                            startIcon={<DeleteForeverIcon />}
+                            onClick={() => setOpenConfirmClearDay(true)}
+                            sx={{ borderRadius: 4, py: 1 }}
+                        >
+                            Giorno
+                        </Button>
+                        <Button
+                            fullWidth
+                            variant="text"
+                            color="error"
+                            onClick={() => setOpenConfirmClearWeek(true)}
+                            sx={{ borderRadius: 4, py: 1, fontSize: '0.7rem' }}
+                        >
+                            Reset Totale
+                        </Button>
+                    </Stack>
+                </Stack>
+            </Paper>
+
+            {/* Azioni Desktop (Normali) */}
+            {!isMobile && (
+                <Box sx={{ mt: 4, textAlign: 'center' }}>
+                    <Stack direction="row" spacing={2} justifyContent="center">
+                        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenAddRowDialog(true)} sx={{ borderRadius: 4, px: 4 }}>Genera Sequenza</Button>
+                        <Button variant="outlined" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearDay(true)} sx={{ borderRadius: 4, px: 4 }}>Pulisci Giorno</Button>
+                        <Button variant="text" color="error" onClick={() => setOpenConfirmClearWeek(true)}>Reset Totale</Button>
+                    </Stack>
+                </Box>
+            )}
+
+            {/* DIALOGS - ottimizzati per larghezza mobile */}
+            <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
+                <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Totale?</DialogTitle>
+                <DialogContent><Typography textAlign="center">Svuoterai tutta la settimana locale. Procedere?</Typography></DialogContent>
+                <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
+                    <Button onClick={() => setOpenConfirmClearWeek(false)} variant="outlined">No</Button>
+                    <Button onClick={handleClearEntireWeekLocal} variant="contained" color="error">Sì, svuota</Button>
+                </DialogActions>
+            </Dialog>
+
+            <Dialog open={openConfirmClearDay} onClose={() => setOpenConfirmClearDay(false)} fullWidth maxWidth="xs">
+                <DialogTitle sx={{ textAlign: 'center' }}>Svuota {filterDay}</DialogTitle>
+                <DialogContent><Typography textAlign="center">Rimuovere tutti gli studenti da questo giorno?</Typography></DialogContent>
+                <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
+                    <Button onClick={() => setOpenConfirmClearDay(false)}>Annulla</Button>
+                    <Button onClick={handleClearFullDayLocal} variant="contained" color="error">Conferma</Button>
+                </DialogActions>
+            </Dialog>
 
             <Dialog open={openTimeDialog} onClose={() => setOpenTimeDialog(false)} fullWidth maxWidth="xs">
-                <DialogTitle>Modifica Orario</DialogTitle>
+                <DialogTitle>Cambia Orario</DialogTitle>
                 <DialogContent>
-                    <Typography variant="body2" sx={{ mb: 2 }}>
-                        {getLessonsData(filterDay)[0]?.ora === timeData.old ? "⚠️ Prima riga: attiva cascata (+1h)." : "Modifica singola."}
+                    <Typography variant="caption" color="primary" sx={{ mb: 1, display: 'block' }}>
+                        {getLessonsData(filterDay)[0]?.ora === timeData.old ? "Cascata +1h attiva" : "Modifica singola riga"}
                     </Typography>
-                    <TextField fullWidth type="time" value={timeData.new} onChange={(e) => setTimeData({...timeData, new: e.target.value})} InputLabelProps={{ shrink: true }} />
+                    <TextField fullWidth type="time" value={timeData.new} onChange={(e) => setTimeData({...timeData, new: e.target.value})} InputLabelProps={{ shrink: true }} sx={{ mt: 1 }} />
                 </DialogContent>
-                <DialogActions>
+                <DialogActions sx={{ p: 2 }}>
                     <Button onClick={() => setOpenTimeDialog(false)}>Annulla</Button>
                     <Button onClick={handleUpdateLocalTime} variant="contained">Applica</Button>
                 </DialogActions>
             </Dialog>
 
             <Dialog open={openAddRowDialog} onClose={() => setOpenAddRowDialog(false)} fullWidth maxWidth="xs">
-                <DialogTitle>Genera Orari</DialogTitle>
+                <DialogTitle>Genera Programma</DialogTitle>
                 <DialogContent>
+                    <Typography variant="body2" sx={{ mb: 2 }}>Inserisci l'ora di inizio per creare 6 slot consecutivi.</Typography>
                     <TextField fullWidth type="time" label="Ora Inizio" value={newTimeLabel} onChange={(e) => setNewTimeLabel(e.target.value)} InputLabelProps={{ shrink: true }} />
                 </DialogContent>
-                <DialogActions>
+                <DialogActions sx={{ p: 2 }}>
                     <Button onClick={() => setOpenAddRowDialog(false)}>Annulla</Button>
-                    <Button onClick={handleAddLocalSequence} variant="contained">Genera 6 Ore</Button>
+                    <Button onClick={handleAddLocalSequence} variant="contained">Crea Slot</Button>
                 </DialogActions>
             </Dialog>
 
-            <Dialog open={openDialog} onClose={() => setOpenDialog(false)} fullWidth maxWidth="xs">
-                <DialogTitle>Assegna Studente</DialogTitle>
-                <DialogContent>
-                    <FormControl fullWidth sx={{ mt: 1 }}>
-                        <InputLabel>Studente</InputLabel>
-                        <Select value={selectedStudent} label="Studente" onChange={(e) => setSelectedStudent(e.target.value)}>
-                            <MenuItem value=""><em>Nessuno</em></MenuItem>
-                            {subscribers.map((sub) => (
-                                <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem>
-                            ))}
-                        </Select>
-                    </FormControl>
-                </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setOpenDialog(false)}>Annulla</Button>
-                    <Button onClick={() => handleUpdateLocalSlot(selectedSlot.ora, selectedSlot.giorno, selectedStudent)} variant="contained">Applica</Button>
-                </DialogActions>
-            </Dialog>
-
-            <Dialog open={openConfirmClear} onClose={() => setOpenConfirmClear(false)}>
-                <DialogTitle>Libera Slot?</DialogTitle>
-                <DialogActions>
-                    <Button onClick={() => setOpenConfirmClear(false)}>No</Button>
-                    <Button onClick={() => handleUpdateLocalSlot(selectedSlot.ora, selectedSlot.giorno, "")} color="error" variant="contained">Sì, libera</Button>
-                </DialogActions>
-            </Dialog>
-
-            {/* --- FAB DI SALVATAGGIO (Appare solo se ci sono modifiche) --- */}
+            {/* FLOATING SAVE BUTTON */}
             <Zoom in={hasChanges}>
-                <Box sx={{ position: 'fixed', bottom: 20, right: 20, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <Fab color="error" size="small" onClick={() => { setLocalSchedules(schedules); setHasChanges(false); }}>
+                <Box sx={{ position: 'fixed', bottom: isMobile ? 90 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare?")) { setLocalSchedules(schedules); setHasChanges(false); } }}>
                         <RefreshIcon />
                     </Fab>
-                    <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving}>
-                        {saving ? <CircularProgress size={24} /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA {filterDay.toUpperCase()}</>}
+                    <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving} sx={{ boxShadow: 6, px: 3 }}>
+                        {saving ? <CircularProgress size={24} color="inherit" /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA</>}
                     </Fab>
                 </Box>
             </Zoom>
