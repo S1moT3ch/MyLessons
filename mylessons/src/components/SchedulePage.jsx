@@ -6,15 +6,17 @@ import {
     DialogTitle, DialogContent, DialogActions, FormControl,
     Select, MenuItem, TextField, Fab, Zoom
 } from '@mui/material';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import AccessTimeFilledIcon from '@mui/icons-material/AccessTimeFilled';
-import EditIcon from '@mui/icons-material/Edit';
-import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
-import SaveIcon from '@mui/icons-material/Save';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import {
+    ArrowBack as ArrowBackIcon,
+    AccessTimeFilled as AccessTimeFilledIcon,
+    Edit as EditIcon,
+    DeleteSweep as DeleteSweepIcon,
+    Save as SaveIcon,
+    Refresh as RefreshIcon,
+    DeleteForever as DeleteForeverIcon,
+    WarningAmber as WarningAmberIcon,
+    AddCircleOutline as AddCircleOutlineIcon
+} from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import { APPS_SCRIPT_URL } from "./config/config";
@@ -38,7 +40,7 @@ export default function SchedulePage() {
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
 
-    const [schedules, setSchedules] = useState([]);
+    // Rimosso 'schedules' inutilizzato
     const [localSchedules, setLocalSchedules] = useState([]);
     const [subscribers, setSubscribers] = useState([]);
 
@@ -79,7 +81,7 @@ export default function SchedulePage() {
             const dataSubs = await resSubs.json();
 
             if (dataSched.status === "success") {
-                setSchedules(dataSched.data);
+                // Aggiorniamo solo lo stato locale
                 setLocalSchedules(dataSched.data);
             }
             if (dataSubs.status === "success") setSubscribers(dataSubs.data);
@@ -114,12 +116,13 @@ export default function SchedulePage() {
             const resultText = await response.text();
             if (resultText.includes("Success")) {
                 setHasChanges(false);
-                setSchedules(localSchedules);
                 alert("Agenda salvata con successo!");
             }
         } catch (e) {
             alert("Errore di connessione.");
-        } finally { setSaving(false); }
+        } finally {
+            setSaving(false);
+        }
     };
 
     const handleAddEmptySlot = () => {
@@ -127,6 +130,13 @@ export default function SchedulePage() {
         setLocalSchedules([...localSchedules, newSlot]);
         setHasChanges(true);
     };
+
+    const getLessonsData = useCallback((targetDay) => {
+        return localSchedules
+            .map((slot, globalIdx) => ({ ...slot, globalIdx }))
+            .filter(slot => slot.giorno === targetDay)
+            .sort((a, b) => a.ora.localeCompare(b.ora));
+    }, [localSchedules]);
 
     const handleRemoveSlotCompletely = (indexInFiltered) => {
         const dayLessons = getLessonsData(filterDay);
@@ -147,13 +157,6 @@ export default function SchedulePage() {
         setLocalSchedules(updated);
         setHasChanges(true);
         setEditingSlot(null);
-    };
-
-    const getLessonsData = (targetDay) => {
-        return localSchedules
-            .map((slot, globalIdx) => ({ ...slot, globalIdx }))
-            .filter(slot => slot.giorno === targetDay)
-            .sort((a, b) => a.ora.localeCompare(b.ora));
     };
 
     const handleClearFullDayLocal = () => {
@@ -182,7 +185,6 @@ export default function SchedulePage() {
 
     return (
         <Box sx={{ p: isMobile ? 1.5 : 3, pb: isMobile ? 22 : 12, maxWidth: 650, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh' }}>
-            {/* Header */}
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
@@ -194,7 +196,6 @@ export default function SchedulePage() {
                 </ToggleButtonGroup>
             </Stack>
 
-            {/* Selettore Giorno */}
             {viewMode === 'giorno' && (
                 <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', mb: 3, pb: 1 }}>
                     {giorni.map((g) => (
@@ -244,7 +245,7 @@ export default function SchedulePage() {
                                                             <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
                                                                 <Box sx={{ flexGrow: 1 }}>
                                                                     {isOccupied ? (
-                                                                        <Chip label={slot.nome} avatar={<Avatar>{slot.nome[0]}</Avatar>} sx={{ bgcolor: getStudentColor(slot.email), color: 'white', fontWeight: 'bold' }} />
+                                                                        <Chip label={slot.nome} avatar={<Avatar sx={{ width: 24, height: 24 }}>{slot.nome[0]}</Avatar>} sx={{ bgcolor: getStudentColor(slot.email), color: 'white', fontWeight: 'bold' }} />
                                                                     ) : (
                                                                         <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Slot Vuoto</Typography>
                                                                     )}
@@ -267,7 +268,6 @@ export default function SchedulePage() {
                 </Box>
             )}
 
-            {/* Footer Mobile (Reset Giorno e Reset Settimana) */}
             <Paper elevation={10} sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, p: 2, borderRadius: '24px 24px 0 0', display: isMobile ? 'block' : 'none', bgcolor: 'white' }}>
                 <Stack direction="row" spacing={2}>
                     <Button fullWidth variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>
@@ -279,7 +279,6 @@ export default function SchedulePage() {
                 </Stack>
             </Paper>
 
-            {/* Desktop Toolbar */}
             {!isMobile && (
                 <Box sx={{ mt: 4, textAlign: 'center' }}>
                     <Stack direction="row" spacing={2} justifyContent="center">
@@ -289,7 +288,6 @@ export default function SchedulePage() {
                 </Box>
             )}
 
-            {/* Dialogs */}
             <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Settimana?</DialogTitle>
                 <DialogContent><Typography textAlign="center">Tutti gli studenti verranno rimossi da tutti i giorni della settimana. Procedere?</Typography></DialogContent>
@@ -319,7 +317,6 @@ export default function SchedulePage() {
                 </DialogActions>
             </Dialog>
 
-            {/* Save FAB */}
             <Zoom in={hasChanges}>
                 <Box sx={{ position: 'fixed', bottom: isMobile ? 110 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare?")) fetchData(); }}><RefreshIcon /></Fab>
