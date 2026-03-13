@@ -10,11 +10,11 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AccessTimeFilledIcon from '@mui/icons-material/AccessTimeFilled';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
-import AddIcon from '@mui/icons-material/Add';
 import SaveIcon from '@mui/icons-material/Save';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import { APPS_SCRIPT_URL } from "./config/config";
@@ -52,53 +52,37 @@ export default function SchedulePage() {
     const [openConfirmClearDay, setOpenConfirmClearDay] = useState(false);
     const [openConfirmClearWeek, setOpenConfirmClearWeek] = useState(false);
     const [openTimeDialog, setOpenTimeDialog] = useState(false);
-    const [openAddRowDialog, setOpenAddRowDialog] = useState(false);
 
-    const [timeData, setTimeData] = useState({ old: '', new: '' });
-    const [newTimeLabel, setNewTimeLabel] = useState('09:00');
+    const [timeData, setTimeData] = useState({ old: '', new: '', index: null });
 
     const giorni = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 
-    // 1. Recupero centralizzato del token e sessione
     const getAuthData = useCallback(() => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return null;
-        try {
-            return JSON.parse(sessionStr);
-        } catch (e) {
-            return null;
-        }
+        try { return JSON.parse(sessionStr); } catch (e) { return null; }
     }, []);
 
-    // 2. Caricamento dati iniziale (GET)
     const fetchData = useCallback(async () => {
         const session = getAuthData();
         if (!session?.id_token) return navigate('/login');
+        const teacherFullName = `${session.given_name} ${session.family_name}`;
 
         setLoading(true);
         try {
             const [resSched, resSubs] = await Promise.all([
-                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&token=${session.id_token}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`),
                 fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`)
             ]);
 
             const dataSched = await resSched.json();
             const dataSubs = await resSubs.json();
 
-            // Controllo validità sessione dal backend
-            if (dataSched.message?.includes("autorizzato") || dataSubs.message?.includes("autorizzato")) {
-                Cookies.remove('user_session');
-                return navigate('/login');
-            }
-
             if (dataSched.status === "success") {
                 setSchedules(dataSched.data);
                 setLocalSchedules(dataSched.data);
             }
-            if (dataSubs.status === "success") {
-                setSubscribers(dataSubs.data);
-            }
-
+            if (dataSubs.status === "success") setSubscribers(dataSubs.data);
             setHasChanges(false);
         } catch (error) {
             console.error("Errore recupero dati:", error);
@@ -107,70 +91,67 @@ export default function SchedulePage() {
         }
     }, [getAuthData, navigate]);
 
-    useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+    useEffect(() => { fetchData(); }, [fetchData]);
 
-    // 3. Salvataggio orari (POST autenticata)
     const saveFullDay = async () => {
         const session = getAuthData();
         if (!session?.id_token) return navigate('/login');
+        const teacherFullName = `${session.given_name} ${session.family_name}`;
 
         setSaving(true);
         try {
             const response = await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
-                mode: 'cors', // Usiamo cors per leggere la risposta
+                mode: 'cors',
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
                     action: "saveFullSchedule",
                     id_token: session.id_token,
+                    teacherName: teacherFullName,
                     allSchedules: localSchedules
                 })
             });
-
             const resultText = await response.text();
-
             if (resultText.includes("Success")) {
                 setHasChanges(false);
                 setSchedules(localSchedules);
-                // Feedback visivo rapido
-                alert("Agenda aggiornata correttamente!");
-            } else {
-                alert("Errore durante il salvataggio: " + resultText);
+                alert("Agenda salvata con successo!");
             }
         } catch (e) {
-            console.error("Errore salvataggio:", e);
-            alert("Errore di connessione. Riprova.");
-        } finally {
-            setSaving(false);
-        }
+            alert("Errore di connessione.");
+        } finally { setSaving(false); }
     };
 
-    // 4. Logica di aggiornamento slot con aggancio nomi
-    const handleUpdateLocalSlot = (ora, giorno, email) => {
-        // Cerchiamo lo studente nei sottoscrittori per recuperare il nome completo
-        const student = subscribers.find(s =>
-            s.studentEmail.toLowerCase().trim() === email.toLowerCase().trim()
-        );
+    const handleAddEmptySlot = () => {
+        const newSlot = { giorno: filterDay, ora: "12:00", email: "", nome: "" };
+        setLocalSchedules([...localSchedules, newSlot]);
+        setHasChanges(true);
+    };
 
-        const updated = localSchedules.map(slot =>
-            (slot.giorno === giorno && slot.ora === ora)
-                ? {
-                    ...slot,
-                    email: email,
-                    nome: student ? student.studentName : (email === "" ? "" : email)
-                }
-                : slot
-        );
+    const handleRemoveSlotCompletely = (indexInFiltered) => {
+        const dayLessons = getLessonsData(filterDay);
+        const targetToRemove = dayLessons[indexInFiltered];
+        const updated = localSchedules.filter((slot) => slot !== targetToRemove);
+        setLocalSchedules(updated);
+        setHasChanges(true);
+    };
+
+    const handleUpdateLocalSlot = (ora, giorno, email, globalIdx) => {
+        const student = subscribers.find(s => s.studentEmail.toLowerCase() === email.toLowerCase());
+        const updated = [...localSchedules];
+        updated[globalIdx] = {
+            ...updated[globalIdx],
+            email: email,
+            nome: student ? student.studentName : (email === "" ? "" : email)
+        };
         setLocalSchedules(updated);
         setHasChanges(true);
         setEditingSlot(null);
     };
 
-    // --- LOGICHE DI MANIPOLAZIONE ORARI (Invariate ma integrate) ---
     const getLessonsData = (targetDay) => {
         return localSchedules
+            .map((slot, globalIdx) => ({ ...slot, globalIdx }))
             .filter(slot => slot.giorno === targetDay)
             .sort((a, b) => a.ora.localeCompare(b.ora));
     };
@@ -192,109 +173,37 @@ export default function SchedulePage() {
     };
 
     const handleUpdateLocalTime = () => {
-        const dayLessons = getLessonsData(filterDay);
-        const isFirstRow = dayLessons.length > 0 && dayLessons[0].ora === timeData.old;
-        let [ore, minuti] = timeData.new.split(':').map(Number);
-        let startUpdating = false;
-
-        const updated = localSchedules.map(slot => {
-            if (slot.giorno !== filterDay) return slot;
-            if (isFirstRow) {
-                if (slot.ora === timeData.old) startUpdating = true;
-                if (startUpdating) {
-                    const newOra = `${String(ore).padStart(2, '0')}:${String(minuti).padStart(2, '0')}`;
-                    ore = (ore + 1) % 24;
-                    return { ...slot, ora: newOra };
-                }
-            } else {
-                if (slot.ora === timeData.old) return { ...slot, ora: timeData.new };
-            }
-            return slot;
-        });
-
+        const updated = [...localSchedules];
+        updated[timeData.index].ora = timeData.new;
         setLocalSchedules(updated);
         setHasChanges(true);
         setOpenTimeDialog(false);
     };
 
-    const handleAddLocalSequence = () => {
-        let [ore, minuti] = newTimeLabel.split(':').map(Number);
-        const newSlots = [];
-        for (let i = 0; i < 6; i++) {
-            const oraFormattata = `${String(ore).padStart(2, '0')}:${String(minuti).padStart(2, '0')}`;
-            newSlots.push({ giorno: filterDay, ora: oraFormattata, email: "", nome: "" });
-            ore = (ore + 1) % 24;
-        }
-        setLocalSchedules([...localSchedules, ...newSlots]);
-        setHasChanges(true);
-        setOpenAddRowDialog(false);
-    };
-
-    // --- RENDERING ---
     return (
-        <Box sx={{
-            p: isMobile ? 1.5 : 3,
-            pb: isMobile ? 22 : 12,
-            maxWidth: 650,
-            mx: 'auto',
-            bgcolor: '#f8f9fa',
-            minHeight: '100vh'
-        }}>
+        <Box sx={{ p: isMobile ? 1.5 : 3, pb: isMobile ? 22 : 12, maxWidth: 650, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh' }}>
             {/* Header */}
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
                     <Typography variant="h5" fontWeight="800">Agenda</Typography>
                 </Stack>
-                <ToggleButtonGroup
-                    value={viewMode}
-                    exclusive
-                    onChange={(e, next) => next && setViewMode(next)}
-                    size="small"
-                    sx={{ bgcolor: 'white' }}
-                >
-                    <ToggleButton value="giorno" sx={{ px: 2 }}>Giorno</ToggleButton>
-                    <ToggleButton value="settimana" sx={{ px: 2 }}>Settimana</ToggleButton>
+                <ToggleButtonGroup value={viewMode} exclusive onChange={(e, next) => next && setViewMode(next)} size="small">
+                    <ToggleButton value="giorno">Giorno</ToggleButton>
+                    <ToggleButton value="settimana">Settimana</ToggleButton>
                 </ToggleButtonGroup>
             </Stack>
 
             {/* Selettore Giorno */}
             {viewMode === 'giorno' && (
-                <Box sx={{
-                    display: 'flex',
-                    gap: 1,
-                    overflowX: 'auto',
-                    mb: 3,
-                    pb: 1,
-                    '&::-webkit-scrollbar': { display: 'none' }
-                }}>
+                <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', mb: 3, pb: 1 }}>
                     {giorni.map((g) => (
-                        <Chip
-                            key={g}
-                            label={g}
-                            clickable
-                            color={filterDay === g ? "primary" : "default"}
-                            variant={filterDay === g ? "filled" : "outlined"}
-                            onClick={() => {
-                                if (hasChanges) {
-                                    if (window.confirm("Modifiche non salvate! Cambiando giorno le perderai.")) {
-                                        setLocalSchedules(schedules);
-                                        setHasChanges(false);
-                                        setFilterDay(g);
-                                    }
-                                } else {
-                                    setFilterDay(g);
-                                }
-                            }}
-                            sx={{ fontWeight: 'bold', px: 1 }}
-                        />
+                        <Chip key={g} label={g} clickable color={filterDay === g ? "primary" : "default"} variant={filterDay === g ? "filled" : "outlined"} onClick={() => setFilterDay(g)} sx={{ fontWeight: 'bold' }} />
                     ))}
                 </Box>
             )}
 
-            {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>
-            ) : (
+            {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box> : (
                 <Box>
                     {(viewMode === 'giorno' ? [filterDay] : giorni).map((currentDay) => {
                         const lessons = getLessonsData(currentDay);
@@ -302,38 +211,23 @@ export default function SchedulePage() {
 
                         return (
                             <Box key={currentDay} sx={{ mb: 4 }}>
-                                <Typography variant="overline" color="text.secondary" fontWeight="900" sx={{ ml: 1, fontSize: '0.8rem' }}>
-                                    {currentDay.toUpperCase()}
-                                </Typography>
-                                <Stack spacing={1.5} sx={{ mt: 1 }}>
+                                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                                    <Typography variant="overline" color="text.secondary" fontWeight="900" sx={{ ml: 1 }}>{currentDay}</Typography>
+                                    {viewMode === 'giorno' && (
+                                        <Button startIcon={<AddCircleOutlineIcon />} size="small" onClick={handleAddEmptySlot} sx={{ fontWeight: 'bold' }}>Aggiungi Slot</Button>
+                                    )}
+                                </Stack>
+                                <Stack spacing={1.5}>
                                     {lessons.map((slot, idx) => {
                                         const isOccupied = slot.email !== "";
-                                        const isEditing = editingSlot === `${slot.ora}-${currentDay}`;
+                                        const isEditing = editingSlot === `${slot.globalIdx}`;
 
                                         return (
-                                            <Card key={`${currentDay}-${idx}`} elevation={0} sx={{
-                                                borderRadius: 4,
-                                                border: '1px solid',
-                                                borderColor: isEditing ? 'primary.main' : '#e0e0e0',
-                                                boxShadow: isEditing ? '0 4px 12px rgba(25, 118, 210, 0.12)' : 'none'
-                                            }}>
+                                            <Card key={slot.globalIdx} elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: isEditing ? 'primary.main' : '#e0e0e0' }}>
                                                 <Box sx={{ display: 'flex', minHeight: 70 }}>
-                                                    <Box sx={{
-                                                        bgcolor: isOccupied ? 'rgba(0,0,0,0.03)' : 'transparent',
-                                                        p: 1,
-                                                        minWidth: 75,
-                                                        display: 'flex',
-                                                        flexDirection: 'column',
-                                                        alignItems: 'center',
-                                                        justifyContent: 'center',
-                                                        borderRight: '1px solid #eee'
-                                                    }}>
+                                                    <Box sx={{ p: 1, minWidth: 75, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid #eee' }}>
                                                         <Typography variant="body2" fontWeight="800">{slot.ora}</Typography>
-                                                        <IconButton
-                                                            size="small"
-                                                            onClick={() => { setTimeData({ old: slot.ora, new: slot.ora }); setOpenTimeDialog(true); }}
-                                                            sx={{ color: theme.palette.text.disabled }}
-                                                        >
+                                                        <IconButton size="small" onClick={() => { setTimeData({ old: slot.ora, new: slot.ora, index: slot.globalIdx }); setOpenTimeDialog(true); }}>
                                                             <AccessTimeFilledIcon sx={{ fontSize: 16 }} />
                                                         </IconButton>
                                                     </Box>
@@ -341,54 +235,23 @@ export default function SchedulePage() {
                                                     <Box sx={{ p: 1, px: 2, flexGrow: 1, display: 'flex', alignItems: 'center' }}>
                                                         {isEditing ? (
                                                             <FormControl fullWidth size="small">
-                                                                <Select
-                                                                    value={slot.email || ""}
-                                                                    onChange={(e) => handleUpdateLocalSlot(slot.ora, currentDay, e.target.value)}
-                                                                    autoOpen
-                                                                    sx={{ borderRadius: 3 }}
-                                                                >
+                                                                <Select value={slot.email || ""} onChange={(e) => handleUpdateLocalSlot(slot.ora, currentDay, e.target.value, slot.globalIdx)}>
                                                                     <MenuItem value=""><em>Libero</em></MenuItem>
-                                                                    {subscribers.map((sub) => (
-                                                                        <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem>
-                                                                    ))}
+                                                                    {subscribers.map((sub) => ( <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem> ))}
                                                                 </Select>
                                                             </FormControl>
                                                         ) : (
                                                             <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
-                                                                <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                                                                <Box sx={{ flexGrow: 1 }}>
                                                                     {isOccupied ? (
-                                                                        <Chip
-                                                                            avatar={<Avatar sx={{ bgcolor: 'white !important', color: getStudentColor(slot.email) }}>{slot.nome?.charAt(0)}</Avatar>}
-                                                                            label={slot.nome}
-                                                                            sx={{
-                                                                                bgcolor: getStudentColor(slot.email),
-                                                                                color: 'white',
-                                                                                fontWeight: 'bold',
-                                                                                width: '100%',
-                                                                                justifyContent: 'flex-start',
-                                                                                '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.85rem' }
-                                                                            }}
-                                                                        />
+                                                                        <Chip label={slot.nome} avatar={<Avatar>{slot.nome[0]}</Avatar>} sx={{ bgcolor: getStudentColor(slot.email), color: 'white', fontWeight: 'bold' }} />
                                                                     ) : (
-                                                                        <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic', ml: 1 }}>Vuoto</Typography>
+                                                                        <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Slot Vuoto</Typography>
                                                                     )}
                                                                 </Box>
-
-                                                                <Stack direction="row" spacing={0.5}>
-                                                                    <IconButton
-                                                                        onClick={() => setEditingSlot(`${slot.ora}-${currentDay}`)}
-                                                                        sx={{ bgcolor: 'rgba(25, 118, 210, 0.05)' }}
-                                                                    >
-                                                                        <EditIcon fontSize="small" color="primary" />
-                                                                    </IconButton>
-                                                                    {isOccupied && (
-                                                                        <IconButton
-                                                                            onClick={() => handleUpdateLocalSlot(slot.ora, currentDay, "")}
-                                                                            sx={{ bgcolor: 'rgba(211, 47, 47, 0.05)' }}
-                                                                        >
-                                                                            <DeleteSweepIcon fontSize="small" color="error" />
-                                                                        </IconButton>
-                                                                    )}
+                                                                <Stack direction="row">
+                                                                    <IconButton onClick={() => setEditingSlot(`${slot.globalIdx}`)}><EditIcon fontSize="small" color="primary" /></IconButton>
+                                                                    <IconButton onClick={() => handleRemoveSlotCompletely(idx)}><DeleteSweepIcon fontSize="small" color="error" /></IconButton>
                                                                 </Stack>
                                                             </Stack>
                                                         )}
@@ -404,40 +267,15 @@ export default function SchedulePage() {
                 </Box>
             )}
 
-            {/* Mobile Footer Buttons */}
-            <Paper elevation={10} sx={{
-                position: 'fixed',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                p: 2,
-                borderRadius: '24px 24px 0 0',
-                zIndex: theme.zIndex.appBar,
-                display: isMobile ? 'block' : 'none',
-                bgcolor: 'white'
-            }}>
-                <Stack spacing={1.5}>
-                    <Stack direction="row" spacing={2}>
-                        <Button
-                            fullWidth
-                            variant="outlined"
-                            color="error"
-                            startIcon={<DeleteForeverIcon />}
-                            onClick={() => setOpenConfirmClearDay(true)}
-                            sx={{ borderRadius: 4, py: 1 }}
-                        >
-                            Giorno
-                        </Button>
-                        <Button
-                            fullWidth
-                            variant="text"
-                            color="error"
-                            onClick={() => setOpenConfirmClearWeek(true)}
-                            sx={{ borderRadius: 4, py: 1, fontSize: '0.75rem' }}
-                        >
-                            Reset Totale
-                        </Button>
-                    </Stack>
+            {/* Footer Mobile (Reset Giorno e Reset Settimana) */}
+            <Paper elevation={10} sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, p: 2, borderRadius: '24px 24px 0 0', display: isMobile ? 'block' : 'none', bgcolor: 'white' }}>
+                <Stack direction="row" spacing={2}>
+                    <Button fullWidth variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>
+                        Svuota {filterDay.slice(0,3)}
+                    </Button>
+                    <Button fullWidth variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>
+                        Reset Settimana
+                    </Button>
                 </Stack>
             </Paper>
 
@@ -445,66 +283,48 @@ export default function SchedulePage() {
             {!isMobile && (
                 <Box sx={{ mt: 4, textAlign: 'center' }}>
                     <Stack direction="row" spacing={2} justifyContent="center">
-                        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setOpenAddRowDialog(true)} sx={{ borderRadius: 4, px: 4 }}>Genera Sequenza</Button>
-                        <Button variant="outlined" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearDay(true)} sx={{ borderRadius: 4, px: 4 }}>Pulisci Giorno</Button>
-                        <Button variant="text" color="error" onClick={() => setOpenConfirmClearWeek(true)}>Reset Totale</Button>
+                        <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>Svuota Giorno</Button>
+                        <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>Reset Settimana</Button>
                     </Stack>
                 </Box>
             )}
 
-            {/* Modals */}
+            {/* Dialogs */}
             <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
-                <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Totale?</DialogTitle>
-                <DialogContent><Typography textAlign="center">Svuoterai tutta la settimana locale. Procedere?</Typography></DialogContent>
+                <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Settimana?</DialogTitle>
+                <DialogContent><Typography textAlign="center">Tutti gli studenti verranno rimossi da tutti i giorni della settimana. Procedere?</Typography></DialogContent>
                 <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
-                    <Button onClick={() => setOpenConfirmClearWeek(false)} variant="outlined">No</Button>
-                    <Button onClick={handleClearEntireWeekLocal} variant="contained" color="error">Sì, svuota</Button>
+                    <Button onClick={() => setOpenConfirmClearWeek(false)}>Annulla</Button>
+                    <Button onClick={handleClearEntireWeekLocal} variant="contained" color="error">Conferma Reset</Button>
                 </DialogActions>
             </Dialog>
 
             <Dialog open={openConfirmClearDay} onClose={() => setOpenConfirmClearDay(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}>Svuota {filterDay}</DialogTitle>
-                <DialogContent><Typography textAlign="center">Rimuovere tutti gli studenti da questo giorno?</Typography></DialogContent>
+                <DialogContent><Typography textAlign="center">Tutti gli studenti verranno rimossi da questo giorno. Gli orari rimarranno.</Typography></DialogContent>
                 <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
                     <Button onClick={() => setOpenConfirmClearDay(false)}>Annulla</Button>
                     <Button onClick={handleClearFullDayLocal} variant="contained" color="error">Conferma</Button>
                 </DialogActions>
             </Dialog>
 
-            <Dialog open={openTimeDialog} onClose={() => setOpenTimeDialog(false)} fullWidth maxWidth="xs">
-                <DialogTitle>Cambia Orario</DialogTitle>
+            <Dialog open={openTimeDialog} onClose={() => setOpenTimeDialog(false)}>
+                <DialogTitle>Imposta Orario</DialogTitle>
                 <DialogContent>
-                    <Typography variant="caption" color="primary" sx={{ mb: 1, display: 'block' }}>
-                        {getLessonsData(filterDay)[0]?.ora === timeData.old ? "Cascata +1h attiva" : "Modifica singola riga"}
-                    </Typography>
-                    <TextField fullWidth type="time" value={timeData.new} onChange={(e) => setTimeData({...timeData, new: e.target.value})} InputLabelProps={{ shrink: true }} sx={{ mt: 1 }} />
+                    <TextField fullWidth type="time" value={timeData.new} onChange={(e) => setTimeData({...timeData, new: e.target.value})} sx={{ mt: 1 }} />
                 </DialogContent>
-                <DialogActions sx={{ p: 2 }}>
+                <DialogActions>
                     <Button onClick={() => setOpenTimeDialog(false)}>Annulla</Button>
-                    <Button onClick={handleUpdateLocalTime} variant="contained">Applica</Button>
+                    <Button onClick={handleUpdateLocalTime} variant="contained">Conferma</Button>
                 </DialogActions>
             </Dialog>
 
-            <Dialog open={openAddRowDialog} onClose={() => setOpenAddRowDialog(false)} fullWidth maxWidth="xs">
-                <DialogTitle>Genera Programma</DialogTitle>
-                <DialogContent>
-                    <Typography variant="body2" sx={{ mb: 2 }}>Inserisci l'ora di inizio per creare 6 slot consecutivi.</Typography>
-                    <TextField fullWidth type="time" label="Ora Inizio" value={newTimeLabel} onChange={(e) => setNewTimeLabel(e.target.value)} InputLabelProps={{ shrink: true }} />
-                </DialogContent>
-                <DialogActions sx={{ p: 2 }}>
-                    <Button onClick={() => setOpenAddRowDialog(false)}>Annulla</Button>
-                    <Button onClick={handleAddLocalSequence} variant="contained">Crea Slot</Button>
-                </DialogActions>
-            </Dialog>
-
-            {/* Floating Save FAB */}
+            {/* Save FAB */}
             <Zoom in={hasChanges}>
-                <Box sx={{ position: 'fixed', bottom: isMobile ? 90 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare?")) { setLocalSchedules(schedules); setHasChanges(false); } }}>
-                        <RefreshIcon />
-                    </Fab>
-                    <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving} sx={{ boxShadow: 6, px: 3 }}>
-                        {saving ? <CircularProgress size={24} color="inherit" /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA</>}
+                <Box sx={{ position: 'fixed', bottom: isMobile ? 110 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare?")) fetchData(); }}><RefreshIcon /></Fab>
+                    <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving}>
+                        {saving ? <CircularProgress size={24} /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA</>}
                     </Fab>
                 </Box>
             </Zoom>
