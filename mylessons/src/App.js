@@ -9,6 +9,7 @@ import DashboardStudente from './components/DashboardStudente';
 import SchedulePage from "./components/SchedulePage";
 import StudentSchedulePage from "./components/StudentSchedulePage";
 import StudentsManagementPage from "./components/StudentManagementPage";
+import FinancialDashboard from "./components/FinancialDashboard";
 
 // --- 1. HELPER SESSIONE ---
 const getSession = () => {
@@ -96,6 +97,14 @@ function App() {
                         element={
                             <RoleBasedRoute allowedRole="Insegnante">
                                 <StudentsManagementPage />
+                            </RoleBasedRoute>
+                        }
+                    />
+                    <Route
+                        path="revenue"
+                        element={
+                            <RoleBasedRoute allowedRole="Insegnante">
+                                <FinancialDashboard />
                             </RoleBasedRoute>
                         }
                     />
