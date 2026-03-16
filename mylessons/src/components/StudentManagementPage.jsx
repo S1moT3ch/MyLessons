@@ -262,13 +262,6 @@ export default function StudentsManagementPage() {
                             })}
                         </TableBody>
                     </Table>
-                    <Button
-                        onClick={() => navigate('/revenue')}
-                        variant="outlined"
-                        startIcon={<WalletIcon />}
-                    >
-                        Visualizza Guadagni
-                    </Button>
                 </TableContainer>
             )}
 

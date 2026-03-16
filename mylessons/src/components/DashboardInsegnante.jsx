@@ -13,6 +13,7 @@ import SyncIcon from '@mui/icons-material/Sync';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { APPS_SCRIPT_URL } from "./config/config";
+import {AccountBalanceWallet as WalletIcon} from "@mui/icons-material";
 
 export default function DashboardInsegnante() {
     const theme = useTheme();
@@ -175,6 +176,13 @@ export default function DashboardInsegnante() {
                     >
                         Gestisci Studenti
                         <ChevronRightIcon sx={{ opacity: 0.5 }} />
+                    </Button>
+                    <Button
+                        onClick={() => navigate('/revenue')}
+                        variant="outlined"
+                        startIcon={<WalletIcon />}
+                    >
+                        Visualizza Guadagni
                     </Button>
                 </Grid>
 
