@@ -4,7 +4,8 @@ import {
     TableContainer, TableHead, TableRow, Avatar, Chip,
     CircularProgress, IconButton, Stack, TextField, InputAdornment,
     useMediaQuery, useTheme, Divider, Dialog, DialogTitle,
-    DialogContent, DialogActions, Button, Menu, MenuItem, ListItemIcon, ListItemText
+    DialogContent, DialogActions, Button, Menu, MenuItem, ListItemIcon,
+    ListItemText, Snackbar, Alert
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
@@ -15,8 +16,7 @@ import {
     Save as SaveIcon,
     Visibility as VisibilityIcon,
     VisibilityOff as VisibilityOffIcon,
-    CalendarMonth as CalendarIcon,
-    AccountBalanceWallet as WalletIcon
+    CalendarMonth as CalendarIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
@@ -31,14 +31,17 @@ export default function StudentsManagementPage() {
     const [studentsData, setStudentsData] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
 
-    // Privacy selettiva per il debito economico
     const [visibleStudentEmail, setVisibleStudentEmail] = useState(null);
-
     const [payDialog, setPayDialog] = useState({ open: false, student: null, amountPaid: 1 });
     const [rateDialog, setRateDialog] = useState({ open: false, student: null, rate: 0 });
     const [isSaving, setIsSaving] = useState(false);
-    const [anchorEl, setAnchorEl] = useState(null);
+
+    // Gestione Menu contestuale via Coordinate (per evitare errore alto-sinistra)
+    const [menuPosition, setMenuPosition] = useState(null);
     const [selectedStudent, setSelectedStudent] = useState(null);
+    const openMenu = Boolean(menuPosition);
+
+    const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
     const fetchData = useCallback(async () => {
         const sessionStr = Cookies.get('user_session');
@@ -50,16 +53,34 @@ export default function StudentsManagementPage() {
             const response = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
             const result = await response.json();
             if (result.status === "success") setStudentsData(result.data);
-        } catch (error) { console.error(error); } finally { setLoading(false); }
+        } catch (error) {
+            console.error(error);
+        } finally { setLoading(false); }
     }, [navigate]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+
+    // Funzione apertura menu con cattura coordinate
+    const handleOpenMenu = (event, student) => {
+        event.stopPropagation();
+        setMenuPosition({
+            mouseX: event.clientX,
+            mouseY: event.clientY,
+        });
+        setSelectedStudent(student);
+    };
+
+    const handleCloseMenu = () => {
+        setMenuPosition(null);
+        setSelectedStudent(null);
+    };
+
+    const handleCloseSnackbar = () => setSnackbar({ ...snackbar, open: false });
 
     const handleConfirmPayment = async () => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr || !payDialog.student) return;
         const session = JSON.parse(sessionStr);
-
         const newDebtValue = Math.max(0, payDialog.student.lezioniDaPagare - payDialog.amountPaid);
 
         setIsSaving(true);
@@ -78,8 +99,11 @@ export default function StudentsManagementPage() {
             if ((await response.text()).includes("Success")) {
                 setStudentsData(prev => prev.map(s => s.studentEmail === payDialog.student.studentEmail ? { ...s, lezioniDaPagare: newDebtValue } : s));
                 setPayDialog({ open: false, student: null, amountPaid: 1 });
+                setSnackbar({ open: true, message: 'Pagamento registrato!', severity: 'success' });
             }
-        } catch (e) { console.error(e); } finally { setIsSaving(false); }
+        } catch (e) {
+            setSnackbar({ open: true, message: 'Errore nel salvataggio', severity: 'error' });
+        } finally { setIsSaving(false); }
     };
 
     const handleSaveRate = async () => {
@@ -103,18 +127,11 @@ export default function StudentsManagementPage() {
             if ((await response.text()).includes("Success")) {
                 setStudentsData(prev => prev.map(s => s.studentEmail === rateDialog.student.studentEmail ? { ...s, tariffa: rateDialog.rate } : s));
                 setRateDialog({ open: false, student: null, rate: 0 });
+                setSnackbar({ open: true, message: 'Tariffa aggiornata!', severity: 'success' });
             }
-        } catch (e) { console.error(e); } finally { setIsSaving(false); }
-    };
-
-    const handleOpenMenu = (event, student) => {
-        setAnchorEl(event.currentTarget);
-        setSelectedStudent(student);
-    };
-
-    const handleCloseMenu = () => {
-        setAnchorEl(null);
-        setSelectedStudent(null);
+        } catch (e) {
+            setSnackbar({ open: true, message: 'Errore invio dati', severity: 'error' });
+        } finally { setIsSaving(false); }
     };
 
     const formatCurrency = (studentEmail, amount) => {
@@ -127,7 +144,6 @@ export default function StudentsManagementPage() {
         s.studentEmail.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
-    // --- CARD MOBILE ---
     const MobileCard = ({ student }) => {
         const isVisible = visibleStudentEmail === student.studentEmail;
         const isSettled = student.lezioniDaPagare === 0;
@@ -191,7 +207,7 @@ export default function StudentsManagementPage() {
                 <IconButton onClick={() => navigate(-1)} sx={{ bgcolor: 'white', boxShadow: 1, width: 35, height: 35 }}>
                     <ArrowBackIcon fontSize="small" />
                 </IconButton>
-                <Typography variant="h6" fontWeight="900">Gestione Studenti</Typography>
+                <Typography variant="h6" fontWeight="900">Anagrafica Studenti</Typography>
             </Stack>
 
             <TextField
@@ -232,30 +248,20 @@ export default function StudentsManagementPage() {
                                             <Typography variant="body2" fontWeight="700">{student.studentName}</Typography>
                                             <Typography variant="caption" color="text.secondary">{student.studentEmail}</Typography>
                                         </TableCell>
-                                        <TableCell align="center">
-                                            <Chip label={student.lessonCount} size="small" variant="outlined" />
-                                        </TableCell>
+                                        <TableCell align="center"><Chip label={student.lessonCount} size="small" variant="outlined" /></TableCell>
                                         <TableCell align="center">{student.lezioniSvolte}</TableCell>
-                                        <TableCell align="center">
-                                            <Chip
-                                                label={student.lezioniDaPagare}
-                                                size="small"
-                                                color={isSettled ? "success" : "error"}
-                                            />
-                                        </TableCell>
+                                        <TableCell align="center"><Chip label={student.lezioniDaPagare} size="small" color={isSettled ? "success" : "error"} /></TableCell>
                                         <TableCell
                                             align="center"
-                                            sx={{
-                                                fontWeight: 'bold',
-                                                cursor: 'pointer',
-                                                color: isSettled ? "success.main" : "error.main"
-                                            }}
+                                            sx={{ fontWeight: 'bold', cursor: 'pointer', color: isSettled ? "success.main" : "error.main" }}
                                             onClick={() => setVisibleStudentEmail(visibleStudentEmail === student.studentEmail ? null : student.studentEmail)}
                                         >
                                             {formatCurrency(student.studentEmail, student.lezioniDaPagare * (student.tariffa || 0))}
                                         </TableCell>
                                         <TableCell align="right">
-                                            <IconButton size="small" onClick={(e) => handleOpenMenu(e, student)}><SettingsIcon fontSize="inherit" /></IconButton>
+                                            <IconButton size="small" onClick={(e) => handleOpenMenu(e, student)}>
+                                                <SettingsIcon fontSize="inherit" />
+                                            </IconButton>
                                         </TableCell>
                                     </TableRow>
                                 );
@@ -265,19 +271,28 @@ export default function StudentsManagementPage() {
                 </TableContainer>
             )}
 
-            {/* MENU E DIALOGS */}
-            <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleCloseMenu} slotProps={{ paper: { sx: { borderRadius: 3 } } }}>
+            {/* MENU ANCORATO ALLE COORDINATE DEL CLICK */}
+            <Menu
+                open={openMenu}
+                onClose={handleCloseMenu}
+                anchorReference="anchorPosition"
+                anchorPosition={
+                    menuPosition !== null
+                        ? { top: menuPosition.mouseY, left: menuPosition.mouseX }
+                        : undefined
+                }
+                slotProps={{ paper: { sx: { borderRadius: 3, boxShadow: '0 8px 25px rgba(0,0,0,0.15)', minWidth: 180 } } }}
+            >
                 <MenuItem onClick={() => { setPayDialog({ open: true, student: selectedStudent, amountPaid: selectedStudent?.lezioniDaPagare || 1 }); handleCloseMenu(); }}>
                     <ListItemIcon><PaidIcon fontSize="small" color="primary" /></ListItemIcon>
-                    <ListItemText primary="Registra Pagamento" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Registra Pagamento" primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }} />
                 </MenuItem>
                 <MenuItem onClick={() => { setRateDialog({ open: true, student: selectedStudent, rate: selectedStudent?.tariffa || 0 }); handleCloseMenu(); }}>
                     <ListItemIcon><EuroIcon fontSize="small" color="success" /></ListItemIcon>
-                    <ListItemText primary="Imposta Tariffa" primaryTypographyProps={{ variant: 'body2' }} />
+                    <ListItemText primary="Imposta Tariffa" primaryTypographyProps={{ variant: 'body2', fontWeight: 600 }} />
                 </MenuItem>
             </Menu>
 
-            {/* DIALOG INCASSO */}
             <Dialog open={payDialog.open} onClose={() => !isSaving && setPayDialog({ ...payDialog, open: false })} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ fontWeight: 'bold', fontSize: '1.1rem' }}>Saldo Lezioni</DialogTitle>
                 <DialogContent>
@@ -294,11 +309,7 @@ export default function StudentsManagementPage() {
                 </DialogContent>
                 <DialogActions sx={{ p: 2 }}>
                     <Button onClick={() => setPayDialog({ ...payDialog, open: false })}>Annulla</Button>
-                    <Button
-                        onClick={handleConfirmPayment}
-                        variant="contained"
-                        disabled={isSaving || payDialog.amountPaid > (payDialog.student?.lezioniDaPagare || 0) || payDialog.amountPaid <= 0}
-                    >
+                    <Button onClick={handleConfirmPayment} variant="contained" disabled={isSaving || payDialog.amountPaid > (payDialog.student?.lezioniDaPagare || 0) || payDialog.amountPaid <= 0}>
                         Conferma
                     </Button>
                 </DialogActions>
@@ -322,6 +333,18 @@ export default function StudentsManagementPage() {
                     <Button onClick={handleSaveRate} variant="contained" startIcon={<SaveIcon />} disabled={isSaving}>Salva</Button>
                 </DialogActions>
             </Dialog>
+
+            <Snackbar
+                open={snackbar.open}
+                autoHideDuration={4000}
+                onClose={handleCloseSnackbar}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+            >
+                <Alert onClose={handleCloseSnackbar} severity={snackbar.severity} variant="filled" sx={{ width: '100%', borderRadius: 3 }}>
+                    {snackbar.message}
+                </Alert>
+            </Snackbar>
+
         </Box>
     );
 }

@@ -13,6 +13,7 @@ import SchoolIcon from '@mui/icons-material/School';
 import GroupIcon from '@mui/icons-material/Group';
 import LogoutIcon from '@mui/icons-material/Logout';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'; // Icona per i pagamenti
 import { APPS_SCRIPT_URL } from "./config/config";
 
 export default function DashboardStudente() {
@@ -32,8 +33,6 @@ export default function DashboardStudente() {
     const [submitting, setSubmitting] = useState(false);
     const [status, setStatus] = useState({ type: '', msg: '' });
 
-    // --- FILTRAGGIO INSEGNANTI ---
-    // Filtriamo la lista degli insegnanti escludendo quelli a cui lo studente è già iscritto
     const availableTeachers = teachers.filter(t =>
         !mySubscriptions.some(sub => sub.teacherId === t.id)
     );
@@ -82,7 +81,6 @@ export default function DashboardStudente() {
     const handleSubscribe = async () => {
         if (!selectedTeacher || !userData?.id_token) return;
 
-        // Validazione di sicurezza lato client: evita invii doppi se la lista non si è ancora aggiornata
         if (mySubscriptions.some(sub => sub.teacherId === selectedTeacher.id)) {
             setStatus({ type: 'error', msg: 'Sei già iscritto a questo corso!' });
             return;
@@ -108,7 +106,6 @@ export default function DashboardStudente() {
 
             setStatus({ type: 'success', msg: `Iscrizione completata con il Prof. ${selectedTeacher.name}!` });
             setSelectedTeacher('');
-            // Refresh per aggiornare la lista delle iscrizioni e far sparire il docente dalla tendina
             setTimeout(() => loadDashboardData(), 1000);
         } catch (error) {
             setStatus({ type: 'error', msg: 'Errore durante l\'iscrizione.' });
@@ -143,12 +140,13 @@ export default function DashboardStudente() {
             </Box>
 
             <Grid container spacing={3}>
-                {/* Agenda */}
-                <Grid item xs={12}>
+
+                {/* --- BOTTONI RAPIDI (Agenda e Pagamenti) --- */}
+                <Grid item xs={12} sm={6}>
                     <Card
                         onClick={() => navigate('/dashboard/schedule')}
                         sx={{
-                            p: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            p: 3, height: '100%', display: 'flex', alignItems: 'center',
                             cursor: 'pointer', bgcolor: 'secondary.main', color: 'white', borderRadius: 5,
                             transition: '0.3s', '&:hover': { transform: 'translateY(-5px)', boxShadow: 8 }
                         }}
@@ -156,11 +154,29 @@ export default function DashboardStudente() {
                         <Stack direction="row" alignItems="center" spacing={2}>
                             <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)', width: 50, height: 50 }}><CalendarMonthIcon fontSize="large" /></Avatar>
                             <Box>
-                                <Typography variant="h6" fontWeight="bold">Il Mio Orario Personale</Typography>
-                                <Typography variant="body2" sx={{ opacity: 0.9 }}>Visualizza le tue lezioni confermate</Typography>
+                                <Typography variant="h6" fontWeight="bold">Agenda</Typography>
+                                <Typography variant="body2" sx={{ opacity: 0.9 }}>Le tue lezioni</Typography>
                             </Box>
                         </Stack>
-                        {!isMobile && <Button variant="contained" color="inherit" sx={{ color: 'secondary.main', fontWeight: 'bold' }}>Apri Agenda</Button>}
+                    </Card>
+                </Grid>
+
+                <Grid item xs={12} sm={6}>
+                    <Card
+                        onClick={() => navigate('/dashboard/payments')}
+                        sx={{
+                            p: 3, height: '100%', display: 'flex', alignItems: 'center',
+                            cursor: 'pointer', bgcolor: 'success.main', color: 'white', borderRadius: 5,
+                            transition: '0.3s', '&:hover': { transform: 'translateY(-5px)', boxShadow: 8 }
+                        }}
+                    >
+                        <Stack direction="row" alignItems="center" spacing={2}>
+                            <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)', width: 50, height: 50 }}><AccountBalanceWalletIcon fontSize="large" /></Avatar>
+                            <Box>
+                                <Typography variant="h6" fontWeight="bold">Bilancio</Typography>
+                                <Typography variant="body2" sx={{ opacity: 0.9 }}>Pagamenti e debiti</Typography>
+                            </Box>
+                        </Stack>
                     </Card>
                 </Grid>
 
@@ -207,7 +223,7 @@ export default function DashboardStudente() {
                         {status.msg && <Alert severity={status.type} sx={{ mb: 3, borderRadius: 3 }}>{status.msg}</Alert>}
 
                         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                            Seleziona un insegnante dalla lista. Sono mostrati solo i docenti a cui non sei ancora iscritto.
+                            Seleziona un insegnante dalla lista.
                         </Typography>
 
                         <FormControl fullWidth sx={{ mb: 3, bgcolor: 'white' }}>

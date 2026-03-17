@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-    Box, Typography, Paper, CircularProgress, IconButton,
+    Box, Typography, CircularProgress, IconButton,
     Card, Stack, Chip, Avatar, useTheme, useMediaQuery,
     ToggleButton, ToggleButtonGroup, Button, Dialog,
     DialogTitle, DialogContent, DialogActions, FormControl,
@@ -13,7 +13,6 @@ import {
     DeleteSweep as DeleteSweepIcon,
     Save as SaveIcon,
     Refresh as RefreshIcon,
-    DeleteForever as DeleteForeverIcon,
     WarningAmber as WarningAmberIcon,
     AddCircleOutline as AddCircleOutlineIcon
 } from '@mui/icons-material';
@@ -21,7 +20,8 @@ import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import { APPS_SCRIPT_URL } from "./config/config";
 
-// Generazione colore studente per coerenza visiva
+// --- HELPERS ---
+
 const getStudentColor = (email) => {
     if (!email) return '#9c27b0';
     let hash = 0;
@@ -30,6 +30,34 @@ const getStudentColor = (email) => {
     }
     const hue = Math.abs(hash % 360);
     return `hsl(${hue}, 65%, 40%)`;
+};
+
+const calculateEndTime = (startTime, durationMinutes) => {
+    if (!startTime) return "12:00";
+    const [hours, minutes] = startTime.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes + Number(durationMinutes), 0);
+    return date.getHours().toString().padStart(2, '0') + ":" +
+        date.getMinutes().toString().padStart(2, '0');
+};
+
+// Logica di ricalcolo sequenziale per garantire la cascata su tutti gli slot
+const applyCascade = (slots) => {
+    if (slots.length === 0) return [];
+
+    const sorted = [...slots].sort((a, b) => a.ora.localeCompare(b.ora));
+    const result = [];
+
+    sorted.forEach((slot, idx) => {
+        if (idx === 0) {
+            result.push(slot);
+        } else {
+            const prevSlot = result[idx - 1]; // Riferimento allo slot appena ricalcolato
+            const newStart = calculateEndTime(prevSlot.ora, prevSlot.durata || 60);
+            result.push({ ...slot, ora: newStart });
+        }
+    });
+    return result;
 };
 
 export default function SchedulePage() {
@@ -41,7 +69,6 @@ export default function SchedulePage() {
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
 
-    // localSchedules contiene la copia di lavoro dell'agenda
     const [localSchedules, setLocalSchedules] = useState([]);
     const [subscribers, setSubscribers] = useState([]);
 
@@ -55,7 +82,6 @@ export default function SchedulePage() {
     const [openConfirmClearDay, setOpenConfirmClearDay] = useState(false);
     const [openConfirmClearWeek, setOpenConfirmClearWeek] = useState(false);
     const [openTimeDialog, setOpenTimeDialog] = useState(false);
-
     const [timeData, setTimeData] = useState({ old: '', new: '', index: null });
 
     const giorni = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
@@ -66,7 +92,6 @@ export default function SchedulePage() {
         try { return JSON.parse(sessionStr); } catch (e) { return null; }
     }, []);
 
-    // Recupero dati iniziale
     const fetchData = useCallback(async () => {
         const session = getAuthData();
         if (!session?.id_token) return navigate('/login');
@@ -82,9 +107,7 @@ export default function SchedulePage() {
             const dataSched = await resSched.json();
             const dataSubs = await resSubs.json();
 
-            if (dataSched.status === "success") {
-                setLocalSchedules(dataSched.data);
-            }
+            if (dataSched.status === "success") setLocalSchedules(dataSched.data);
             if (dataSubs.status === "success") setSubscribers(dataSubs.data);
             setHasChanges(false);
         } catch (error) {
@@ -96,10 +119,9 @@ export default function SchedulePage() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    // Salvataggio: Il backend gestirà i +/- sui contatori basandosi sulle differenze
     const saveFullDay = async () => {
         const session = getAuthData();
-        if (!session?.id_token) return navigate('/login');
+        if (!session?.id_token) return;
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
         setSaving(true);
@@ -118,23 +140,29 @@ export default function SchedulePage() {
             const resultText = await response.text();
             if (resultText.includes("Success")) {
                 setHasChanges(false);
-                alert("Agenda salvata! I contatori degli studenti sono stati aggiornati.");
-                fetchData(); // Ricarichiamo per sincronizzare eventuali ID o nomi aggiornati dal server
+                fetchData();
             }
         } catch (e) {
-            alert("Errore di connessione durante il salvataggio.");
+            alert("Errore di connessione.");
         } finally {
             setSaving(false);
         }
     };
 
     const handleAddEmptySlot = () => {
-        const newSlot = { giorno: filterDay, ora: "12:00", email: "", nome: "" };
+        const daySlots = localSchedules.filter(s => s.giorno === filterDay);
+        let nextTime = "12:00";
+
+        if (daySlots.length > 0) {
+            const lastSlot = [...daySlots].sort((a,b) => a.ora.localeCompare(b.ora)).pop();
+            nextTime = calculateEndTime(lastSlot.ora, 60);
+        }
+
+        const newSlot = { giorno: filterDay, ora: nextTime, email: "", nome: "", durata: 60 };
         setLocalSchedules([...localSchedules, newSlot]);
         setHasChanges(true);
     };
 
-    // Funzione helper per ottenere le lezioni filtrate per giorno
     const getLessonsData = useCallback((targetDay) => {
         return localSchedules
             .map((slot, globalIdx) => ({ ...slot, globalIdx }))
@@ -142,10 +170,42 @@ export default function SchedulePage() {
             .sort((a, b) => a.ora.localeCompare(b.ora));
     }, [localSchedules]);
 
-    const handleRemoveSlotCompletely = (globalIdx) => {
-        const updated = localSchedules.filter((_, idx) => idx !== globalIdx);
-        setLocalSchedules(updated);
+    const handleRemoveSlotCompletely = async (globalIdx) => {
+        const slotToRemove = localSchedules[globalIdx];
+        const targetDay = slotToRemove.giorno;
+        const isOccupied = slotToRemove.email !== "";
+
+        if (isOccupied && !window.confirm(`Rimuovendo lo slot eliminerai anche la lezione per ${slotToRemove.nome}. Confermi?`)) return;
+
+        setEditingSlot(null);
+
+        const filteredGlobal = localSchedules.filter((_, idx) => idx !== globalIdx);
+        const daySlots = filteredGlobal.filter(s => s.giorno === targetDay);
+        const recalculatedDay = applyCascade(daySlots);
+
+        const finalSchedules = [
+            ...filteredGlobal.filter(s => s.giorno !== targetDay),
+            ...recalculatedDay
+        ];
+
+        setLocalSchedules(finalSchedules);
         setHasChanges(true);
+
+        if (isOccupied) {
+            const session = getAuthData();
+            try {
+                await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    body: JSON.stringify({
+                        action: "removeSlotAndDecrement",
+                        id_token: session.id_token,
+                        studentEmail: slotToRemove.email,
+                        teacherName: `${session.given_name} ${session.family_name}`
+                    })
+                });
+            } catch (e) { console.error(e); }
+        }
     };
 
     const handleUpdateLocalSlot = (email, globalIdx) => {
@@ -170,24 +230,46 @@ export default function SchedulePage() {
         setOpenConfirmClearDay(false);
     };
 
-    const handleClearEntireWeekLocal = () => {
-        const updated = localSchedules.map(slot => ({ ...slot, email: "", nome: "" }));
-        setLocalSchedules(updated);
-        setHasChanges(true);
-        setOpenConfirmClearWeek(false);
-    };
-
     const handleUpdateLocalTime = () => {
-        const updated = [...localSchedules];
-        updated[timeData.index].ora = timeData.new;
-        setLocalSchedules(updated);
+        const targetDay = localSchedules[timeData.index].giorno;
+        let updatedFull = [...localSchedules];
+        updatedFull[timeData.index].ora = timeData.new;
+
+        const daySlots = updatedFull.filter(s => s.giorno === targetDay);
+        const recalculatedDay = applyCascade(daySlots);
+
+        const final = [
+            ...updatedFull.filter(s => s.giorno !== targetDay),
+            ...recalculatedDay
+        ];
+
+        setLocalSchedules(final);
         setHasChanges(true);
         setOpenTimeDialog(false);
     };
 
+    const handleResetForNewWeek = async () => {
+        const session = getAuthData();
+        setSaving(true);
+        try {
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                mode: 'cors',
+                body: JSON.stringify({
+                    action: "resetScheduleForNewWeek",
+                    id_token: session.id_token,
+                    teacherName: `${session.given_name} ${session.family_name}`
+                })
+            });
+            if ((await response.text()).includes("Success")) {
+                fetchData();
+                setOpenConfirmClearWeek(false);
+            }
+        } catch (e) { alert("Errore reset."); } finally { setSaving(false); }
+    };
+
     return (
         <Box sx={{ p: isMobile ? 1.5 : 3, pb: isMobile ? 22 : 12, maxWidth: 650, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh' }}>
-            {/* Header e Toggle Vista */}
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
@@ -199,7 +281,6 @@ export default function SchedulePage() {
                 </ToggleButtonGroup>
             </Stack>
 
-            {/* Chips Giorni */}
             {viewMode === 'giorno' && (
                 <Box sx={{ display: 'flex', gap: 1, overflowX: 'auto', mb: 3, pb: 1 }}>
                     {giorni.map((g) => (
@@ -240,7 +321,6 @@ export default function SchedulePage() {
                                         return (
                                             <Card key={slot.globalIdx} elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: isEditing ? 'primary.main' : '#e0e0e0' }}>
                                                 <Box sx={{ display: 'flex', minHeight: 70 }}>
-                                                    {/* Colonna Orario */}
                                                     <Box sx={{ p: 1, minWidth: 75, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid #eee', bgcolor: '#fafafa' }}>
                                                         <Typography variant="body2" fontWeight="800">{slot.ora}</Typography>
                                                         <IconButton size="small" onClick={() => { setTimeData({ old: slot.ora, new: slot.ora, index: slot.globalIdx }); setOpenTimeDialog(true); }}>
@@ -248,7 +328,6 @@ export default function SchedulePage() {
                                                         </IconButton>
                                                     </Box>
 
-                                                    {/* Colonna Studente */}
                                                     <Box sx={{ p: 1, px: 2, flexGrow: 1, display: 'flex', alignItems: 'center' }}>
                                                         {isEditing ? (
                                                             <FormControl fullWidth size="small">
@@ -295,41 +374,18 @@ export default function SchedulePage() {
                 </Box>
             )}
 
-            {/* Azioni Mobile */}
-            <Paper elevation={10} sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, p: 2, borderRadius: '24px 24px 0 0', display: isMobile ? 'block' : 'none', bgcolor: 'white', zIndex: 1000 }}>
-                <Stack direction="row" spacing={2}>
-                    <Button fullWidth variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>
-                        Svuota {filterDay.slice(0,3)}
-                    </Button>
-                    <Button fullWidth variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>
-                        Reset Settimana
-                    </Button>
-                </Stack>
-            </Paper>
-
-            {/* Azioni Desktop */}
-            {!isMobile && (
-                <Box sx={{ mt: 4, textAlign: 'center' }}>
-                    <Stack direction="row" spacing={2} justifyContent="center">
-                        <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>Svuota Giorno Corrente</Button>
-                        <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>Reset Totale</Button>
-                    </Stack>
-                </Box>
-            )}
-
-            {/* Dialogs di conferma */}
             <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Settimana?</DialogTitle>
-                <DialogContent><Typography textAlign="center">Tutti gli studenti verranno rimossi da ogni slot dell'intera settimana. I contatori di pagamento verranno aggiornati al salvataggio.</Typography></DialogContent>
+                <DialogContent><Typography textAlign="center">Rimuovi gli studenti per la nuova settimana senza intaccare i debiti.</Typography></DialogContent>
                 <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
                     <Button onClick={() => setOpenConfirmClearWeek(false)}>Annulla</Button>
-                    <Button onClick={handleClearEntireWeekLocal} variant="contained" color="error">Svuota Tutto</Button>
+                    <Button onClick={handleResetForNewWeek} variant="contained" color="error" disabled={saving}>Svuota (Nuova Settimana)</Button>
                 </DialogActions>
             </Dialog>
 
             <Dialog open={openConfirmClearDay} onClose={() => setOpenConfirmClearDay(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}>Svuota {filterDay}</DialogTitle>
-                <DialogContent><Typography textAlign="center">Rimuovere tutti gli studenti assegnati a {filterDay}?</Typography></DialogContent>
+                <DialogContent><Typography textAlign="center">Rimuovere gli studenti assegnati a {filterDay}?</Typography></DialogContent>
                 <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
                     <Button onClick={() => setOpenConfirmClearDay(false)}>Annulla</Button>
                     <Button onClick={handleClearFullDayLocal} variant="contained" color="error">Conferma</Button>
@@ -347,12 +403,11 @@ export default function SchedulePage() {
                 </DialogActions>
             </Dialog>
 
-            {/* Floating Action Buttons per il Salvataggio */}
             <Zoom in={hasChanges}>
                 <Box sx={{ position: 'fixed', bottom: isMobile ? 110 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Fab color="error" size="small" onClick={() => { if(window.confirm("Annullare le modifiche non salvate?")) fetchData(); }}><RefreshIcon /></Fab>
+                    <Fab color="error" size="small" onClick={() => fetchData()}><RefreshIcon /></Fab>
                     <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving}>
-                        {saving ? <CircularProgress size={24} color="inherit" /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA MODIFICHE</>}
+                        {saving ? <CircularProgress size={24} color="inherit" /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA</>}
                     </Fab>
                 </Box>
             </Zoom>

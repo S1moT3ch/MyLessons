@@ -5,22 +5,21 @@ import Cookies from 'js-cookie';
 import {
     Grid, Paper, Typography, Box, CircularProgress,
     List, ListItem, ListItemText, ListItemIcon, Card,
-    Avatar, useTheme, useMediaQuery, Badge, Button, IconButton, Stack
+    Avatar, Badge, Button, IconButton, Stack
 } from '@mui/material';
-import GroupIcon from '@mui/icons-material/Group';
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
-import SyncIcon from '@mui/icons-material/Sync';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import LogoutIcon from '@mui/icons-material/Logout';
+import {
+    CalendarMonth as CalendarMonthIcon,
+    ChevronRight as ChevronRightIcon,
+    Logout as LogoutIcon,
+    AccountBalanceWallet as WalletIcon,
+    People as PeopleIcon,
+    TrendingUp as TrendingUpIcon
+} from '@mui/icons-material';
 import { APPS_SCRIPT_URL } from "./config/config";
-import {AccountBalanceWallet as WalletIcon} from "@mui/icons-material";
 
 export default function DashboardInsegnante() {
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
     const navigate = useNavigate();
 
-    // 1. Inizializziamo l'utente leggendo direttamente il cookie (più sicuro delle prop)
     const [userData] = useState(() => {
         const session = Cookies.get('user_session');
         return session ? JSON.parse(session) : null;
@@ -35,25 +34,15 @@ export default function DashboardInsegnante() {
         navigate('/login', { replace: true });
     }, [navigate]);
 
-    // 2. Fetch iscritti con Token di autenticazione
     const fetchSubscribers = useCallback(async () => {
         if (!userData?.id_token) return;
-
         setLoading(true);
         try {
-            // Inviamo teacherId (che è userData.sub) e il token per la verifica backend
-            const url = `${APPS_SCRIPT_URL}?action=getTeacherSubscribers` +
-                `&teacherId=${userData.sub}` +
-                `&token=${userData.id_token}`;
-
+            const url = `${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`;
             const res = await fetch(url);
             const result = await res.json();
-
-            if (result.status === "success") {
-                setSubscribers(result.data);
-            } else if (result.message?.includes("autorizzato")) {
-                handleLogout(); // Sessione scaduta
-            }
+            if (result.status === "success") setSubscribers(result.data);
+            else if (result.message?.includes("autorizzato")) handleLogout();
         } catch (error) {
             console.error("Errore recupero iscritti:", error);
         } finally {
@@ -61,183 +50,139 @@ export default function DashboardInsegnante() {
         }
     }, [userData, handleLogout]);
 
-    useEffect(() => {
-        fetchSubscribers();
-    }, [fetchSubscribers]);
+    useEffect(() => { fetchSubscribers(); }, [fetchSubscribers]);
 
-    // 3. Protezione Rendering
-    if (!userData) {
-        return (
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}>
-                <CircularProgress />
-            </Box>
-        );
-    }
+    if (!userData) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>;
+
+    // Componente per i pulsanti della griglia
+    const MenuButton = ({ title, icon, color, onClick, subtitle }) => (
+        <Paper
+            component={Button}
+            onClick={onClick}
+            elevation={0}
+            sx={{
+                p: 2,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                borderRadius: 4,
+                bgcolor: 'white',
+                border: '1px solid #eee',
+                textTransform: 'none',
+                width: '100%',
+                minHeight: 110,
+                color: 'text.primary',
+                transition: '0.2s',
+                '&:active': { transform: 'scale(0.95)', bgcolor: '#f5f5f5' }
+            }}
+        >
+            <Avatar sx={{ bgcolor: `${color}.light`, color: `${color}.main`, mb: 1 }}>{icon}</Avatar>
+            <Typography variant="subtitle2" fontWeight="800">{title}</Typography>
+            {subtitle && <Typography variant="caption" color="text.secondary">{subtitle}</Typography>}
+        </Paper>
+    );
 
     return (
-        <Box sx={{ p: isMobile ? 2 : 3, pb: 5, maxWidth: 1200, mx: 'auto' }}>
+        <Box sx={{ p: 2, maxWidth: 800, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh', pb: 5 }}>
 
             {/* Header Profilo */}
-            <Box sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                mb: 4
-            }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 4, mt: 1 }}>
                 <Stack direction="row" spacing={2} alignItems="center">
-                    <Badge
-                        overlap="circular"
-                        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                        badgeContent={<Box sx={{ width: 14, height: 14, bgcolor: 'success.main', borderRadius: '50%', border: '2px solid white' }} />}
-                    >
-                        <Avatar
-                            src={userData.picture}
-                            sx={{ width: isMobile ? 60 : 70, height: isMobile ? 60 : 70, boxShadow: 3 }}
-                        />
+                    <Badge overlap="circular" anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} variant="dot" color="success">
+                        <Avatar src={userData.picture} sx={{ width: 50, height: 50, boxShadow: 1 }} />
                     </Badge>
                     <Box>
-                        <Typography variant={isMobile ? "h6" : "h5"} fontWeight="bold">
+                        <Typography variant="h6" fontWeight="900" sx={{ lineHeight: 1.2 }}>
                             Prof. {userData.family_name}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                            Insegnante • {userData.email}
-                        </Typography>
+                        <Typography variant="caption" color="text.secondary">Area Docente</Typography>
                     </Box>
                 </Stack>
-
-                <IconButton color="error" onClick={handleLogout} sx={{ bgcolor: 'rgba(211, 47, 47, 0.05)' }}>
-                    <LogoutIcon />
+                <IconButton onClick={handleLogout} sx={{ bgcolor: 'white', border: '1px solid #eee' }} color="error">
+                    <LogoutIcon fontSize="small" />
                 </IconButton>
-            </Box>
+            </Stack>
 
-            <Grid container spacing={3} alignItems="stretch">
-                {/* CARD STUDENTI TOTALI */}
-                <Grid item xs={12} md={4}>
+            {/* Quick Stats & Actions Grid */}
+            <Grid container spacing={2} sx={{ mb: 4 }}>
+                <Grid item xs={6}>
+                    <MenuButton
+                        title="Agenda"
+                        subtitle="Orari lezioni"
+                        icon={<CalendarMonthIcon />}
+                        color="secondary"
+                        onClick={() => navigate('/dashboard/schedule')}
+                    />
+                </Grid>
+                <Grid item xs={6}>
+                    <MenuButton
+                        title="Studenti"
+                        subtitle={`${subscribers.length} iscritti`}
+                        icon={<PeopleIcon />}
+                        color="info"
+                        onClick={() => navigate('/dashboard/students')}
+                    />
+                </Grid>
+                <Grid item xs={6}>
+                    <MenuButton
+                        title="Guadagni"
+                        subtitle="Bilancio"
+                        icon={<WalletIcon />}
+                        color="success"
+                        onClick={() => navigate('/dashboard/revenue')}
+                    />
+                </Grid>
+                <Grid item xs={6}>
                     <Paper
                         elevation={0}
                         sx={{
-                            p: 3,
-                            borderRadius: 4,
-                            bgcolor: 'primary.main',
-                            color: 'white',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'center',
+                            p: 2, borderRadius: 4, bgcolor: 'primary.main', color: 'white',
+                            height: '100%', display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'center', textAlign: 'center'
                         }}
                     >
-                        <Typography variant="subtitle2" sx={{ opacity: 0.8 }}>Studenti Iscritti</Typography>
-                        <Typography variant="h3" fontWeight="bold">{subscribers.length}</Typography>
+                        <TrendingUpIcon sx={{ mb: 1, opacity: 0.8 }} />
+                        <Typography variant="h5" fontWeight="900">{subscribers.length}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.8, fontWeight: 'bold' }}>TOTAL STUDENTS</Typography>
                     </Paper>
                 </Grid>
-
-                {/* PULSANTE GESTIONE ORARI */}
-                <Grid item xs={12} md={8}>
-                    <Button
-                        variant="contained"
-                        color="secondary"
-                        fullWidth
-                        onClick={() => navigate('/dashboard/schedule')}
-                        startIcon={<CalendarMonthIcon />}
-                        endIcon={<ChevronRightIcon />}
-                        sx={{
-                            py: 3,
-                            borderRadius: 4,
-                            fontSize: '1.1rem',
-                            fontWeight: 'bold',
-                            textTransform: 'none',
-                            boxShadow: 4,
-                        }}
-                    >
-                        Gestisci e Aggiorna Orari
-                    </Button>
-                </Grid>
-
-                {/* 3. NUOVO PULSANTE GESTIONE STUDENTI */}
-                <Grid item xs={12} sm={6} md={4}>
-                    <Button
-                        variant="contained"
-                        color="info" // Colore azzurro per differenziarlo
-                        fullWidth
-                        onClick={() => navigate('/dashboard/students')}
-                        startIcon={<GroupIcon />}
-                        sx={{
-                            minHeight: 120,
-                            borderRadius: 4,
-                            fontSize: '1rem',
-                            fontWeight: 'bold',
-                            textTransform: 'none',
-                            boxShadow: 4,
-                            bgcolor: '#0288d1', // Tonalità di blu specifica
-                            '&:hover': { bgcolor: '#01579b' },
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 1
-                        }}
-                    >
-                        Gestisci Studenti
-                        <ChevronRightIcon sx={{ opacity: 0.5 }} />
-                    </Button>
-                    <Button
-                        onClick={() => navigate('/revenue')}
-                        variant="outlined"
-                        startIcon={<WalletIcon />}
-                    >
-                        Visualizza Guadagni
-                    </Button>
-                </Grid>
-
-                {/* REGISTRO STUDENTI */}
-                <Grid item xs={12}>
-                    <Card elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: 'divider' }}>
-                        <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center' }}>
-                            <GroupIcon sx={{ mr: 1, color: 'primary.main' }} />
-                            <Typography variant="h6" fontWeight="bold">Registro Studenti</Typography>
-                        </Box>
-
-                        {loading ? (
-                            <Box sx={{ display: 'flex', justifyContent: 'center', p: 6 }}>
-                                <CircularProgress />
-                            </Box>
-                        ) : subscribers.length > 0 ? (
-                            <List disablePadding>
-                                {subscribers.map((student, index) => (
-                                    <ListItem
-                                        key={index}
-                                        divider={index !== subscribers.length - 1}
-                                        sx={{ py: 2 }}
-                                    >
-                                        <ListItemIcon>
-                                            <Avatar sx={{ bgcolor: 'primary.light', color: 'primary.main', fontWeight: 'bold' }}>
-                                                {student.studentName ? student.studentName.charAt(0).toUpperCase() : 'S'}
-                                            </Avatar>
-                                        </ListItemIcon>
-                                        <ListItemText
-                                            primary={<Typography fontWeight="bold">{student.studentName}</Typography>}
-                                            secondary={
-                                                <Stack spacing={0.5} sx={{ mt: 0.5 }}>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        {student.studentEmail}
-                                                    </Typography>
-                                                    <Stack direction="row" spacing={0.5} alignItems="center">
-                                                        <SyncIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
-                                                        <Typography variant="caption" color="text.disabled">
-                                                            Iscritto: {new Date(student.date).toLocaleDateString()}
-                                                        </Typography>
-                                                    </Stack>
-                                                </Stack>
-                                            }
-                                        />
-                                    </ListItem>
-                                ))}
-                            </List>
-                        ) : (
-                            <Box sx={{ p: 5, textAlign: 'center' }}>
-                                <Typography color="text.secondary">Nessuno studente iscritto ai tuoi corsi.</Typography>
-                            </Box>
-                        )}
-                    </Card>
-                </Grid>
             </Grid>
+
+            {/* Registro Studenti Rapido */}
+            <Typography variant="subtitle1" fontWeight="800" sx={{ mb: 2, ml: 1 }}>Ultimi Iscritti</Typography>
+            <Card elevation={0} sx={{ borderRadius: 4, border: '1px solid #eee' }}>
+                {loading ? (
+                    <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={25} /></Box>
+                ) : subscribers.length > 0 ? (
+                    <List disablePadding>
+                        {subscribers.slice(0, 5).map((student, index) => (
+                            <ListItem
+                                key={index}
+                                divider={index !== Math.min(subscribers.length, 5) - 1}
+                                secondaryAction={<ChevronRightIcon sx={{ color: '#ccc' }} />}
+                                onClick={() => navigate('/dashboard/students')}
+                                sx={{ cursor: 'pointer' }}
+                            >
+                                <ListItemIcon>
+                                    <Avatar sx={{ width: 35, height: 35, fontSize: '0.9rem', bgcolor: 'primary.light', color: 'primary.main', fontWeight: 'bold' }}>
+                                        {student.studentName?.charAt(0)}
+                                    </Avatar>
+                                </ListItemIcon>
+                                <ListItemText
+                                    primary={<Typography variant="body2" fontWeight="700">{student.studentName}</Typography>}
+                                    secondary={<Typography variant="caption" color="text.secondary">{new Date(student.date).toLocaleDateString()}</Typography>}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                ) : (
+                    <Box sx={{ p: 3, textAlign: 'center' }}>
+                        <Typography variant="caption" color="text.secondary">Nessuno studente iscritto.</Typography>
+                    </Box>
+                )}
+            </Card>
         </Box>
     );
 }
