@@ -31,21 +31,37 @@ function LoginPage() {
         }
     }, []);
 
-    const completeLogin = (userData, token, selectedRole) => {
+    const completeLogin = async (userData, token, selectedRole) => {
         const sessionData = { ...userData, id_token: token, role: selectedRole };
+
+        // Salviamo la sessione nei cookie
         Cookies.set('user_session', JSON.stringify(sessionData), {
             expires: 1, secure: true, sameSite: 'strict'
         });
         setUser(sessionData);
 
-        // Registrazione fisica nel database tramite POST
-        fetch(APPS_SCRIPT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            body: JSON.stringify({ id_token: token, role: selectedRole }),
-        });
+        try {
+            // Registrazione fisica nel database
+            // USIAMO text/plain per evitare il pre-flight OPTIONS che causa il 401/CORS
+            await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                mode: 'no-cors', // Manteniamo no-cors ma curiamo il body
+                headers: {
+                    'Content-Type': 'text/plain;charset=utf-8',
+                },
+                body: JSON.stringify({
+                    id_token: token,
+                    role: selectedRole
+                    // NOTA: NON mettiamo 'action', così scatta il blocco (requestData.id_token && !action)
+                }),
+            });
 
-        navigate('/dashboard');
+            console.log("Richiesta di registrazione inviata al backend");
+            navigate('/dashboard');
+        } catch (err) {
+            console.error("Errore nell'invio al backend:", err);
+            navigate('/dashboard'); // Navighiamo comunque, ma logghiamo l'errore
+        }
     };
 
     const handleLoginSuccess = async (response) => {

@@ -18,7 +18,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL } from "./config/config";
+import {APPS_SCRIPT_URL} from "./config/config";
 
 // --- HELPERS ---
 
@@ -137,6 +137,7 @@ export default function SchedulePage() {
                     allSchedules: localSchedules
                 })
             });
+
             const resultText = await response.text();
             if (resultText.includes("Success")) {
                 setHasChanges(false);
