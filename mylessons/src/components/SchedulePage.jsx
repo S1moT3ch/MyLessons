@@ -4,13 +4,14 @@ import {
     Card, Stack, Chip, Avatar, useTheme, useMediaQuery,
     ToggleButton, ToggleButtonGroup, Button, Dialog,
     DialogTitle, DialogContent, DialogActions, FormControl,
-    Select, MenuItem, TextField, Fab, Zoom
+    Select, MenuItem, TextField, Fab, Zoom, Paper
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
     AccessTimeFilled as AccessTimeFilledIcon,
     Edit as EditIcon,
     DeleteSweep as DeleteSweepIcon,
+    DeleteForever as DeleteForeverIcon,
     Save as SaveIcon,
     Refresh as RefreshIcon,
     WarningAmber as WarningAmberIcon,
@@ -372,6 +373,29 @@ export default function SchedulePage() {
                             </Box>
                         );
                     })}
+                    {/* Azioni Mobile */}
+                    <Paper elevation={10} sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, p: 2, borderRadius: '24px 24px 0 0', display: isMobile ? 'block' : 'none', bgcolor: 'white', zIndex: 1000 }}>
+                        <Stack direction="row" spacing={2}>
+                            <Button fullWidth variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>
+                                Svuota {filterDay.slice(0,3)}
+                            </Button>
+                            <Button fullWidth variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>
+                                Reset Settimana
+                            </Button>
+                        </Stack>
+                    </Paper>
+
+                    {/* Azioni Desktop */}
+                    {!isMobile && (
+                        <Box sx={{ mt: 4, textAlign: 'center' }}>
+                            <Stack direction="row" spacing={2} justifyContent="center">
+                                <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>Svuota Giorno Corrente</Button>
+                                <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>Reset Totale</Button>
+                            </Stack>
+                        </Box>
+                    )}
+
+                    {/* Dialogs di conferma */}
                 </Box>
             )}
 
