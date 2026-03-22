@@ -1,18 +1,18 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Box, Typography, Paper, Grid, CircularProgress, IconButton,
-    Stack, useMediaQuery, useTheme, Card, CardContent, Avatar,
-    Button, Tooltip
+    Stack, Avatar,
+    Fade
 } from '@mui/material';
 import {
-    ArrowBack as ArrowBackIcon,
+    ArrowBackIosNew as ArrowBackIcon,
     TrendingUp as TrendingUpIcon,
     AccountBalanceWallet as WalletIcon,
     Savings as SavingsIcon,
     Visibility as VisibilityIcon,
     VisibilityOff as VisibilityOffIcon,
-    Person as PersonIcon,
-    InfoOutlined as InfoIcon
+    InfoOutlined as InfoIcon,
+    AccountBalance as BankIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
@@ -20,8 +20,6 @@ import { APPS_SCRIPT_URL } from "./config/config";
 
 export default function FinancialDashboard() {
     const navigate = useNavigate();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
     const [loading, setLoading] = useState(true);
     const [studentsData, setStudentsData] = useState([]);
@@ -44,13 +42,11 @@ export default function FinancialDashboard() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    // Calcoli aggregati con useMemo per performance
     const stats = useMemo(() => {
         return studentsData.reduce((acc, s) => {
             const rate = Number(s.tariffa) || 0;
             const svolte = Number(s.lezioniSvolte) || 0;
             const daPagare = Number(s.lezioniDaPagare) || 0;
-
             const earned = svolte * rate;
             const pending = daPagare * rate;
             const collected = earned - pending;
@@ -63,139 +59,190 @@ export default function FinancialDashboard() {
     }, [studentsData]);
 
     const formatMoney = (amount, isGlobal = true, studentEmail = null) => {
-        const isHidden = isGlobal ? !showGlobalPrivacy : visibleStudentEmail !== studentEmail;
-        if (isHidden) return "•••€";
+        const isHidden = isGlobal ? !showGlobalPrivacy : (visibleStudentEmail !== studentEmail && !showGlobalPrivacy);
+        if (isHidden) return "••••";
         return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' }).format(amount);
     };
 
     if (loading) return (
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-            <CircularProgress />
+        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', gap: 2 }}>
+            <CircularProgress size={40} thickness={4} />
+            <Typography variant="caption" color="text.secondary" fontWeight="700">CARICAMENTO BILANCIO...</Typography>
         </Box>
     );
 
     return (
-        <Box sx={{ p: isMobile ? 2 : 4, maxWidth: 900, mx: 'auto', bgcolor: isMobile ? '#f8f9fa' : 'transparent', minHeight: '100vh', pb: 12 }}>
+        <Box sx={{
+            p: 2,
+            maxWidth: 500,
+            mx: 'auto',
+            bgcolor: '#fdfdfd',
+            minHeight: '100vh',
+            pb: 10
+        }}>
 
-            {/* Header */}
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 4 }}>
-                <Stack direction="row" alignItems="center" spacing={1}>
-                    <IconButton onClick={() => navigate(-1)} sx={{ bgcolor: 'white', boxShadow: 1, width: 35, height: 35 }}>
-                        <ArrowBackIcon fontSize="small" />
-                    </IconButton>
-                    <Typography variant="h6" fontWeight="900">Resoconto Finanziario</Typography>
-                </Stack>
-                <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={showGlobalPrivacy ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                    onClick={() => setShowGlobalPrivacy(!showGlobalPrivacy)}
-                    sx={{ borderRadius: 2, textTransform: 'none' }}
+            {/* Header Moderno */}
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3, pt: 1 }}>
+                <IconButton
+                    onClick={() => navigate(-1)}
+                    sx={{ bgcolor: 'white', border: '1px solid #eee', borderRadius: 3, p: 1 }}
                 >
-                    {isMobile ? "" : (showGlobalPrivacy ? "Nascondi totali" : "Mostra totali")}
-                </Button>
+                    <ArrowBackIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+                <Typography variant="subtitle1" fontWeight="900">Incassi</Typography>
+                <IconButton
+                    onClick={() => setShowGlobalPrivacy(!showGlobalPrivacy)}
+                    sx={{ bgcolor: showGlobalPrivacy ? 'primary.light' : 'white', border: '1px solid #eee', borderRadius: 3, color: showGlobalPrivacy ? 'primary.main' : 'text.primary' }}
+                >
+                    {showGlobalPrivacy ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                </IconButton>
             </Stack>
 
-            {/* Riepilogo Cards */}
-            <Grid container spacing={2} sx={{ mb: 5 }}>
-                <Grid item xs={12} sm={4}>
-                    <StatCard title="Incassato" value={stats.collected} icon={<SavingsIcon color="success" />} bgcolor="#e8f5e9" border="#c8e6c9" />
+            {/* Wallet Card - Totale Incassato */}
+            <Paper
+                elevation={0}
+                sx={{
+                    p: 3,
+                    borderRadius: 6,
+                    bgcolor: 'primary.main',
+                    color: 'white',
+                    mb: 3,
+                    boxShadow: '0 10px 25px rgba(25, 118, 210, 0.25)',
+                    position: 'relative',
+                    overflow: 'hidden'
+                }}
+            >
+                <BankIcon sx={{ position: 'absolute', right: -10, top: -10, fontSize: 120, opacity: 0.1 }} />
+                <Typography variant="caption" sx={{ opacity: 0.8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Totale Incassato
+                </Typography>
+                <Typography variant="h3" fontWeight="900" sx={{ my: 1 }}>
+                    {formatMoney(stats.collected, true)}
+                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                    <TrendingUpIcon sx={{ fontSize: 18 }} />
+                    <Typography variant="caption" fontWeight="600">Performance ottimale questo mese</Typography>
+                </Stack>
+            </Paper>
+
+            {/* Grid Stats Secondarie */}
+            <Grid container spacing={2} sx={{ mb: 4 }}>
+                <Grid item xs={6}>
+                    <StatBox title="In Attesa" value={stats.pending} icon={<WalletIcon />} color="error" />
                 </Grid>
-                <Grid item xs={12} sm={4}>
-                    <StatCard title="Da Riscuotere" value={stats.pending} icon={<WalletIcon color="error" />} bgcolor="#ffebee" border="#ffcdd2" />
-                </Grid>
-                <Grid item xs={12} sm={4}>
-                    <StatCard title="Lavoro Totale" value={stats.potential} icon={<TrendingUpIcon color="primary" />} bgcolor="#e3f2fd" border="#bbdefb" />
+                <Grid item xs={6}>
+                    <StatBox title="Potenziale" value={stats.potential} icon={<SavingsIcon />} color="info" />
                 </Grid>
             </Grid>
 
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2, ml: 1 }}>
-                <Typography variant="subtitle1" fontWeight="800">Dettaglio Studenti</Typography>
-                <Tooltip title="Clicca su un importo per vederlo">
-                    <InfoIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
-                </Tooltip>
+            {/* Sezione Studenti */}
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2, px: 1 }}>
+                <Typography variant="subtitle1" fontWeight="900">Dettaglio per Studente</Typography>
+                <InfoIcon sx={{ fontSize: 18, color: '#ccc' }} />
             </Stack>
 
-            {/* Lista Studenti */}
-            <Stack spacing={2}>
+            <Stack spacing={1.5}>
                 {studentsData.map((student, index) => {
                     const rate = Number(student.tariffa) || 0;
                     const debt = (Number(student.lezioniDaPagare) || 0) * rate;
                     const paid = (Number(student.lezioniSvolte) || 0) * rate - debt;
-                    const isVisible = visibleStudentEmail === student.studentEmail;
+                    const isVisible = visibleStudentEmail === student.studentEmail || showGlobalPrivacy;
 
                     return (
-                        <Paper
-                            key={index}
-                            elevation={0}
-                            onClick={() => setVisibleStudentEmail(isVisible ? null : student.studentEmail)}
-                            sx={{
-                                p: 2,
-                                borderRadius: 4,
-                                border: '1px solid #eee',
-                                cursor: 'pointer',
-                                transition: '0.2s',
-                                '&:active': { bgcolor: '#f0f0f0', transform: 'scale(0.98)' }
-                            }}
-                        >
-                            <Stack direction="row" spacing={2} alignItems="center">
-                                <Avatar sx={{ bgcolor: 'primary.light', color: 'primary.main', width: 40, height: 40 }}>
-                                    <PersonIcon />
-                                </Avatar>
-                                <Box sx={{ flexGrow: 1 }}>
-                                    <Typography variant="subtitle2" fontWeight="800">{student.studentName}</Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                        Tariffa: <b>{rate}€</b> • Svolte: <b>{student.lezioniSvolte}</b>
-                                    </Typography>
-                                </Box>
-                                <Box sx={{ textAlign: 'right' }}>
-                                    <Typography variant="body2" fontWeight="800" color="success.main">
-                                        {formatMoney(paid, false, student.studentEmail)}
-                                    </Typography>
-                                    {debt > 0 ? (
-                                        <Typography variant="caption" fontWeight="bold" color="error.main">
-                                            -{formatMoney(debt, false, student.studentEmail)}
+                        <Fade in={true} timeout={300 + (index * 100)} key={index}>
+                            <Paper
+                                elevation={0}
+                                onClick={() => setVisibleStudentEmail(isVisible ? null : student.studentEmail)}
+                                sx={{
+                                    p: 2,
+                                    borderRadius: 5,
+                                    border: '1px solid #f0f0f0',
+                                    bgcolor: 'white',
+                                    transition: 'all 0.2s ease',
+                                    '&:active': { transform: 'scale(0.97)', bgcolor: '#fafafa' }
+                                }}
+                            >
+                                <Stack direction="row" spacing={2} alignItems="center">
+                                    <Avatar
+                                        variant="rounded"
+                                        sx={{ bgcolor: '#f5f7fa', color: 'primary.main', width: 45, height: 45, borderRadius: 3, fontWeight: 800 }}
+                                    >
+                                        {student.studentName?.charAt(0)}
+                                    </Avatar>
+                                    <Box sx={{ flexGrow: 1 }}>
+                                        <Typography variant="body2" fontWeight="800" sx={{ color: '#2c3e50' }}>
+                                            {student.studentName}
                                         </Typography>
-                                    ) : (
-                                        <Typography variant="caption" fontWeight="bold" color="success.main">Saldato</Typography>
-                                    )}
-                                </Box>
-                            </Stack>
-                        </Paper>
+                                        <Typography variant="caption" color="text.secondary" fontWeight="600">
+                                            {student.lezioniSvolte} lez. • {rate}€/h
+                                        </Typography>
+                                    </Box>
+                                    <Box sx={{ textAlign: 'right' }}>
+                                        <Typography variant="body2" fontWeight="900" color="primary.main">
+                                            {formatMoney(paid, false, student.studentEmail)}
+                                        </Typography>
+                                        {debt > 0 && (
+                                            <Typography variant="caption" fontWeight="800" color="error.main" sx={{ display: 'block' }}>
+                                                -{formatMoney(debt, false, student.studentEmail)}
+                                            </Typography>
+                                        )}
+                                    </Box>
+                                </Stack>
+                            </Paper>
+                        </Fade>
                     );
                 })}
             </Stack>
 
-            {/* Footer Informativo Mobile */}
-            {isMobile && (
-                <Paper sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, p: 2, borderRadius: '24px 24px 0 0', bgcolor: 'white', borderTop: '1px solid #eee' }}>
-                    <Typography variant="caption" color="text.disabled" textAlign="center" display="block">
-                        Tocca uno studente per svelare i suoi conti privati.
+            {/* Bottom Info Bar */}
+            <Box sx={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: '90%', maxWidth: 400 }}>
+                <Paper
+                    elevation={10}
+                    sx={{
+                        p: 1.5,
+                        borderRadius: 4,
+                        bgcolor: 'rgba(255,255,255,0.9)',
+                        backdropFilter: 'blur(10px)',
+                        textAlign: 'center',
+                        border: '1px solid rgba(0,0,0,0.05)'
+                    }}
+                >
+                    <Typography variant="caption" fontWeight="700" color="text.secondary">
+                        Tocca una riga per mostrare i dettagli del singolo studente
                     </Typography>
                 </Paper>
-            )}
+            </Box>
         </Box>
     );
 
-    function StatCard({ title, value, icon, bgcolor, border }) {
+    // Componente interno StatBox
+    function StatBox({ title, value, icon, color }) {
         return (
-            <Card elevation={0} sx={{ borderRadius: 4, bgcolor, border: `1px solid ${border}`, height: '100%' }}>
-                <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Box>
-                            <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                                {title}
-                            </Typography>
-                            <Typography variant="h5" fontWeight="900">
-                                {formatMoney(value, true)}
-                            </Typography>
-                        </Box>
-                        <Avatar sx={{ bgcolor: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-                            {icon}
-                        </Avatar>
-                    </Stack>
-                </CardContent>
-            </Card>
+            <Paper
+                elevation={0}
+                sx={{
+                    p: 2,
+                    borderRadius: 5,
+                    border: '1px solid #f0f0f0',
+                    bgcolor: 'white',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 1
+                }}
+            >
+                <Stack direction="row" alignItems="center" spacing={1}>
+                    <Avatar
+                        variant="rounded"
+                        sx={{ bgcolor: `${color}.light`, color: `${color}.main`, width: 32, height: 32, borderRadius: 2 }}
+                    >
+                        {React.cloneElement(icon, { sx: { fontSize: 18 } })}
+                    </Avatar>
+                    <Typography variant="caption" fontWeight="800" color="text.secondary">{title}</Typography>
+                </Stack>
+                <Typography variant="h6" fontWeight="900">
+                    {formatMoney(value, true)}
+                </Typography>
+            </Paper>
         );
     }
 }

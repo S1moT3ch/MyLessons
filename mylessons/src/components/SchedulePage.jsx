@@ -390,7 +390,7 @@ export default function SchedulePage() {
                         <Box sx={{ mt: 4, textAlign: 'center' }}>
                             <Stack direction="row" spacing={2} justifyContent="center">
                                 <Button variant="outlined" color="error" startIcon={<DeleteSweepIcon />} onClick={() => setOpenConfirmClearDay(true)}>Svuota Giorno Corrente</Button>
-                                <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>Reset Totale</Button>
+                                <Button variant="contained" color="error" startIcon={<DeleteForeverIcon />} onClick={() => setOpenConfirmClearWeek(true)}>Reset Settimana</Button>
                             </Stack>
                         </Box>
                     )}
@@ -401,7 +401,6 @@ export default function SchedulePage() {
 
             <Dialog open={openConfirmClearWeek} onClose={() => setOpenConfirmClearWeek(false)} fullWidth maxWidth="xs">
                 <DialogTitle sx={{ textAlign: 'center' }}><WarningAmberIcon color="error" fontSize="large" /><br/>Reset Settimana?</DialogTitle>
-                <DialogContent><Typography textAlign="center">Rimuovi gli studenti per la nuova settimana senza intaccare i debiti.</Typography></DialogContent>
                 <DialogActions sx={{ p: 2, justifyContent: 'center' }}>
                     <Button onClick={() => setOpenConfirmClearWeek(false)}>Annulla</Button>
                     <Button onClick={handleResetForNewWeek} variant="contained" color="error" disabled={saving}>Svuota (Nuova Settimana)</Button>

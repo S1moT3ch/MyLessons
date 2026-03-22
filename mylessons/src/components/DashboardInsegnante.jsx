@@ -5,7 +5,7 @@ import Cookies from 'js-cookie';
 import {
     Grid, Paper, Typography, Box, CircularProgress,
     List, ListItem, ListItemText, ListItemIcon, Card,
-    Avatar, Badge, Button, IconButton, Stack
+    Avatar, Badge, Button, IconButton, Stack, Divider
 } from '@mui/material';
 import {
     CalendarMonth as CalendarMonthIcon,
@@ -13,7 +13,8 @@ import {
     Logout as LogoutIcon,
     AccountBalanceWallet as WalletIcon,
     People as PeopleIcon,
-    TrendingUp as TrendingUpIcon
+    TrendingUp as TrendingUpIcon,
+    NotificationsNone as NotificationsIcon
 } from '@mui/icons-material';
 import { APPS_SCRIPT_URL } from "./config/config";
 
@@ -52,65 +53,115 @@ export default function DashboardInsegnante() {
 
     useEffect(() => { fetchSubscribers(); }, [fetchSubscribers]);
 
-    if (!userData) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>;
+    if (!userData) return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+            <CircularProgress />
+        </Box>
+    );
 
-    // Componente per i pulsanti della griglia
+    // Componente Bottone Ottimizzato per il Touch
     const MenuButton = ({ title, icon, color, onClick, subtitle }) => (
         <Paper
             component={Button}
             onClick={onClick}
             elevation={0}
             sx={{
-                p: 2,
+                p: 2.5,
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
-                borderRadius: 4,
+                alignItems: 'flex-start', // Allineamento a sinistra più moderno
+                textAlign: 'left',
+                borderRadius: 5,
                 bgcolor: 'white',
-                border: '1px solid #eee',
+                border: '1px solid #f0f0f0',
                 textTransform: 'none',
                 width: '100%',
-                minHeight: 110,
+                minHeight: 120,
                 color: 'text.primary',
-                transition: '0.2s',
-                '&:active': { transform: 'scale(0.95)', bgcolor: '#f5f5f5' }
+                boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                transition: 'all 0.2s ease',
+                '&:active': { transform: 'scale(0.96)', bgcolor: '#fcfcfc' },
+                position: 'relative',
+                overflow: 'hidden'
             }}
         >
-            <Avatar sx={{ bgcolor: `${color}.light`, color: `${color}.main`, mb: 1 }}>{icon}</Avatar>
-            <Typography variant="subtitle2" fontWeight="800">{title}</Typography>
-            {subtitle && <Typography variant="caption" color="text.secondary">{subtitle}</Typography>}
+            <Avatar
+                variant="rounded"
+                sx={{
+                    bgcolor: `${color}.light`,
+                    color: `${color}.main`,
+                    mb: 1.5,
+                    width: 42,
+                    height: 42,
+                    borderRadius: 3
+                }}
+            >
+                {icon}
+            </Avatar>
+            <Box>
+                <Typography variant="body1" fontWeight="800" sx={{ mb: 0.2 }}>{title}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', opacity: 0.8 }}>
+                    {subtitle}
+                </Typography>
+            </Box>
+            <ChevronRightIcon sx={{ position: 'absolute', right: 12, bottom: 12, color: '#ddd', fontSize: 20 }} />
         </Paper>
     );
 
     return (
-        <Box sx={{ p: 2, maxWidth: 800, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh', pb: 5 }}>
+        <Box sx={{
+            p: 2,
+            maxWidth: 500, // Più stretto per simulare un'app mobile su desktop
+            mx: 'auto',
+            bgcolor: '#fdfdfd',
+            minHeight: '100vh',
+            pb: 6
+        }}>
 
-            {/* Header Profilo */}
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 4, mt: 1 }}>
-                <Stack direction="row" spacing={2} alignItems="center">
-                    <Badge overlap="circular" anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} variant="dot" color="success">
-                        <Avatar src={userData.picture} sx={{ width: 50, height: 50, boxShadow: 1 }} />
+            {/* Top Bar */}
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 4, pt: 1 }}>
+                <Stack direction="row" spacing={1.5} alignItems="center">
+                    <Badge
+                        overlap="circular"
+                        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                        variant="dot"
+                        color="success"
+                        sx={{ '& .MuiBadge-badge': { border: '2px solid white', height: 12, width: 12, borderRadius: '50%' } }}
+                    >
+                        <Avatar
+                            src={userData.picture}
+                            sx={{ width: 48, height: 48, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
+                        />
                     </Badge>
                     <Box>
-                        <Typography variant="h6" fontWeight="900" sx={{ lineHeight: 1.2 }}>
-                            Prof. {userData.family_name}
+                        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500, mb: -0.5 }}>
+                            Bentornato,
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">Area Docente</Typography>
+                        <Typography variant="h6" fontWeight="900">
+                            {userData.given_name} {userData.family_name}
+                        </Typography>
                     </Box>
                 </Stack>
-                <IconButton onClick={handleLogout} sx={{ bgcolor: 'white', border: '1px solid #eee' }} color="error">
-                    <LogoutIcon fontSize="small" />
-                </IconButton>
+                <Stack direction="row" spacing={1}>
+                    <IconButton sx={{ bgcolor: 'white', border: '1px solid #f0f0f0', borderRadius: 3 }}>
+                        <NotificationsIcon fontSize="small" sx={{ color: 'text.secondary' }} />
+                    </IconButton>
+                    <IconButton
+                        onClick={handleLogout}
+                        sx={{ bgcolor: '#fff5f5', border: '1px solid #ffebeb', borderRadius: 3 }}
+                        color="error"
+                    >
+                        <LogoutIcon fontSize="small" />
+                    </IconButton>
+                </Stack>
             </Stack>
 
-            {/* Quick Stats & Actions Grid */}
+            {/* Grid delle Azioni */}
             <Grid container spacing={2} sx={{ mb: 4 }}>
                 <Grid item xs={6}>
                     <MenuButton
                         title="Agenda"
-                        subtitle="Orari lezioni"
+                        subtitle="Pianifica lezioni"
                         icon={<CalendarMonthIcon />}
                         color="secondary"
                         onClick={() => navigate('/dashboard/schedule')}
@@ -119,7 +170,7 @@ export default function DashboardInsegnante() {
                 <Grid item xs={6}>
                     <MenuButton
                         title="Studenti"
-                        subtitle={`${subscribers.length} iscritti`}
+                        subtitle={`${subscribers.length} attivi`}
                         icon={<PeopleIcon />}
                         color="info"
                         onClick={() => navigate('/dashboard/students')}
@@ -127,8 +178,8 @@ export default function DashboardInsegnante() {
                 </Grid>
                 <Grid item xs={6}>
                     <MenuButton
-                        title="Guadagni"
-                        subtitle="Bilancio"
+                        title="Bilancio"
+                        subtitle="Vedi incassi"
                         icon={<WalletIcon />}
                         color="success"
                         onClick={() => navigate('/dashboard/revenue')}
@@ -138,51 +189,97 @@ export default function DashboardInsegnante() {
                     <Paper
                         elevation={0}
                         sx={{
-                            p: 2, borderRadius: 4, bgcolor: 'primary.main', color: 'white',
-                            height: '100%', display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'center', textAlign: 'center'
+                            p: 2.5, borderRadius: 5,
+                            bgcolor: 'primary.main',
+                            color: 'white',
+                            alignItems: 'flex-start', justifyContent: 'center',
+                            boxShadow: '0 8px 20px rgba(25, 118, 210, 0.2)'
                         }}
                     >
-                        <TrendingUpIcon sx={{ mb: 1, opacity: 0.8 }} />
-                        <Typography variant="h5" fontWeight="900">{subscribers.length}</Typography>
-                        <Typography variant="caption" sx={{ opacity: 0.8, fontWeight: 'bold' }}>TOTAL STUDENTS</Typography>
+                        <Avatar variant="rounded" sx={{ bgcolor: 'rgba(255,255,255,0.2)', mb: 1.5, width: 42, height: 42 }}>
+                            <TrendingUpIcon sx={{ color: 'white' }} />
+                        </Avatar>
+                        <Typography variant="h4" fontWeight="900" sx={{ mb: -0.5 }}>{subscribers.length}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                            Studenti Totali
+                        </Typography>
                     </Paper>
                 </Grid>
             </Grid>
 
-            {/* Registro Studenti Rapido */}
-            <Typography variant="subtitle1" fontWeight="800" sx={{ mb: 2, ml: 1 }}>Ultimi Iscritti</Typography>
-            <Card elevation={0} sx={{ borderRadius: 4, border: '1px solid #eee' }}>
+            {/* Sezione Recenti */}
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2, px: 0.5 }}>
+                <Typography variant="subtitle1" fontWeight="900">Ultimi Iscritti</Typography>
+                <Button
+                    size="small"
+                    onClick={() => navigate('/dashboard/students')}
+                    sx={{ textTransform: 'none', fontWeight: 700 }}
+                >
+                    Vedi tutti
+                </Button>
+            </Stack>
+
+            <Card elevation={0} sx={{ borderRadius: 5, border: '1px solid #f0f0f0', bgcolor: 'white', overflow: 'hidden' }}>
                 {loading ? (
-                    <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={25} /></Box>
+                    <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
                 ) : subscribers.length > 0 ? (
                     <List disablePadding>
-                        {subscribers.slice(0, 5).map((student, index) => (
-                            <ListItem
-                                key={index}
-                                divider={index !== Math.min(subscribers.length, 5) - 1}
-                                secondaryAction={<ChevronRightIcon sx={{ color: '#ccc' }} />}
-                                onClick={() => navigate('/dashboard/students')}
-                                sx={{ cursor: 'pointer' }}
-                            >
-                                <ListItemIcon>
-                                    <Avatar sx={{ width: 35, height: 35, fontSize: '0.9rem', bgcolor: 'primary.light', color: 'primary.main', fontWeight: 'bold' }}>
-                                        {student.studentName?.charAt(0)}
-                                    </Avatar>
-                                </ListItemIcon>
-                                <ListItemText
-                                    primary={<Typography variant="body2" fontWeight="700">{student.studentName}</Typography>}
-                                    secondary={<Typography variant="caption" color="text.secondary">{new Date(student.date).toLocaleDateString()}</Typography>}
-                                />
-                            </ListItem>
+                        {subscribers.slice(0, 4).map((student, index) => (
+                            <React.Fragment key={index}>
+                                <ListItem
+                                    secondaryAction={
+                                        <IconButton size="small">
+                                            <ChevronRightIcon fontSize="small" sx={{ color: '#bbb' }} />
+                                        </IconButton>
+                                    }
+                                    onClick={() => navigate('/dashboard/students')}
+                                    sx={{
+                                        py: 1.8,
+                                        '&:active': { bgcolor: '#f9f9f9' }
+                                    }}
+                                >
+                                    <ListItemIcon sx={{ minWidth: 50 }}>
+                                        <Avatar sx={{
+                                            width: 40,
+                                            height: 40,
+                                            bgcolor: '#e3f2fd',
+                                            color: 'primary.main',
+                                            fontWeight: 800,
+                                            fontSize: '1rem',
+                                            borderRadius: 2.5
+                                        }}>
+                                            {student.studentName?.charAt(0)}
+                                        </Avatar>
+                                    </ListItemIcon>
+                                    <ListItemText
+                                        primary={<Typography variant="body2" fontWeight="800" sx={{ color: '#2c3e50' }}>{student.studentName}</Typography>}
+                                        secondary={
+                                            <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                Iscritto il {new Date(student.date).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })}
+                                            </Typography>
+                                        }
+                                    />
+                                </ListItem>
+                                {index < Math.min(subscribers.length, 4) - 1 && (
+                                    <Divider variant="inset" component="li" sx={{ opacity: 0.5, mr: 2 }} />
+                                )}
+                            </React.Fragment>
                         ))}
                     </List>
                 ) : (
-                    <Box sx={{ p: 3, textAlign: 'center' }}>
-                        <Typography variant="caption" color="text.secondary">Nessuno studente iscritto.</Typography>
+                    <Box sx={{ p: 6, textAlign: 'center' }}>
+                        <PeopleIcon sx={{ fontSize: 40, color: '#eee', mb: 1 }} />
+                        <Typography variant="body2" color="text.secondary">Nessuno studente iscritto.</Typography>
                     </Box>
                 )}
             </Card>
+
+            {/* Footer Informativo */}
+            <Box sx={{ mt: 4, textAlign: 'center', opacity: 0.5 }}>
+                <Typography variant="caption" fontWeight="600">
+                    MyLessons v1.0 • Sincronizzazione Attiva
+                </Typography>
+            </Box>
         </Box>
     );
 }

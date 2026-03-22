@@ -4,16 +4,20 @@ import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import { jwtDecode } from "jwt-decode";
 import Cookies from 'js-cookie';
 import {
-    Container, Box, Card, Typography, Avatar, Button,
-    Paper, CircularProgress, Stack, TextField, InputAdornment
+    Container, Box, Typography, Avatar, Button,
+    Paper, CircularProgress, Stack, TextField, InputAdornment,
+    Fade, Grow, GlobalStyles
 } from '@mui/material';
 import LockIcon from '@mui/icons-material/Lock';
+import SchoolIcon from '@mui/icons-material/School';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { APPS_SCRIPT_URL } from "./config/config";
 
 function LoginPage() {
     const navigate = useNavigate();
     const location = useLocation();
 
+    // --- LOGICA ORIGINALE PRESERVATA ---
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(false);
     const [showSecretField, setShowSecretField] = useState(false);
@@ -33,34 +37,20 @@ function LoginPage() {
 
     const completeLogin = async (userData, token, selectedRole) => {
         const sessionData = { ...userData, id_token: token, role: selectedRole };
-
-        // Salviamo la sessione nei cookie
         Cookies.set('user_session', JSON.stringify(sessionData), {
             expires: 1, secure: true, sameSite: 'strict'
         });
         setUser(sessionData);
-
         try {
-            // Registrazione fisica nel database
-            // USIAMO text/plain per evitare il pre-flight OPTIONS che causa il 401/CORS
             await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
-                mode: 'no-cors', // Manteniamo no-cors ma curiamo il body
-                headers: {
-                    'Content-Type': 'text/plain;charset=utf-8',
-                },
-                body: JSON.stringify({
-                    id_token: token,
-                    role: selectedRole
-                    // NOTA: NON mettiamo 'action', così scatta il blocco (requestData.id_token && !action)
-                }),
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ id_token: token, role: selectedRole }),
             });
-
-            console.log("Richiesta di registrazione inviata al backend");
             navigate('/dashboard');
         } catch (err) {
-            console.error("Errore nell'invio al backend:", err);
-            navigate('/dashboard'); // Navighiamo comunque, ma logghiamo l'errore
+            navigate('/dashboard');
         }
     };
 
@@ -69,27 +59,20 @@ function LoginPage() {
         const decoded = jwtDecode(id_token);
         setLoading(true);
         setErrorMsg('');
-
         try {
-            // Verifica se l'utente esiste già
             const checkRes = await fetch(`${APPS_SCRIPT_URL}?action=checkUser&email=${decoded.email}&t=${Date.now()}`);
             const checkData = await checkRes.json();
-
             if (checkData.exists) {
-                // Login diretto
                 completeLogin(decoded, id_token, checkData.role);
             } else if (isTeacherSignup) {
-                // Richiesta attivazione docente
                 setTempToken(id_token);
                 setUser(decoded);
                 setShowSecretField(true);
                 setLoading(false);
             } else {
-                // Registrazione studente automatica
                 completeLogin(decoded, id_token, "Studente");
             }
         } catch (error) {
-            console.error("Errore login:", error);
             setLoading(false);
         }
     };
@@ -98,18 +81,11 @@ function LoginPage() {
         if (!inputCode) return;
         setLoading(true);
         setErrorMsg('');
-
         try {
-            // 1. Normalizziamo l'input (opzionale, ma consigliato per evitare errori di battitura)
             const normalizedInput = inputCode.trim().toUpperCase();
-
-            // 2. Trasformiamo l'input in Hash
             const hashedCode = await sha256(normalizedInput);
-
-            // 3. Inviamo l'HASH al server, non la password in chiaro
             const res = await fetch(`${APPS_SCRIPT_URL}?action=verifyTeacherCode&code=${hashedCode}`);
             const data = await res.json();
-
             if (data.status === "success" && data.isValid) {
                 completeLogin(user, tempToken, "Insegnante");
             } else {
@@ -130,7 +106,6 @@ function LoginPage() {
         setInputCode('');
     };
 
-    // Funzione helper per generare l'hash SHA-256
     async function sha256(message) {
         const msgBuffer = new TextEncoder().encode(message);
         const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -139,85 +114,136 @@ function LoginPage() {
     }
 
     return (
-        <Container maxWidth="sm">
-            <Box sx={{ mt: 8, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {loading ? (
-                    <Box sx={{ textAlign: 'center', mt: 4 }}>
-                        <CircularProgress size={60} thickness={4} />
-                        <Typography sx={{ mt: 2 }} color="text.secondary">Elaborazione in corso...</Typography>
-                    </Box>
-                ) : user && !showSecretField ? (
-                    <Card sx={{ p: 4, width: '100%', textAlign: 'center', borderRadius: 4, boxShadow: 3 }}>
-                        <Avatar src={user.picture} sx={{ width: 80, height: 80, mx: 'auto', mb: 2, border: '2px solid #1976d2' }} />
-                        <Typography variant="h6" fontWeight="bold">Ciao, {user.given_name}</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>Hai effettuato l'accesso come {user.role}</Typography>
-                        <Stack spacing={2}>
-                            <Button variant="contained" fullWidth size="large" onClick={() => navigate('/dashboard')}>Vai alla Dashboard</Button>
-                            <Button variant="outlined" color="error" onClick={handleLogout}>Cambia account</Button>
-                        </Stack>
-                    </Card>
-                ) : showSecretField ? (
-                    <Paper sx={{ p: 4, width: '100%', borderRadius: 4, textAlign: 'center', boxShadow: 3 }}>
-                        <Avatar sx={{ bgcolor: 'secondary.main', mx: 'auto', mb: 2 }}><LockIcon /></Avatar>
-                        <Typography variant="h5" fontWeight="bold">Attivazione Docente</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                            Inserisci il codice segreto per attivare il tuo profilo insegnante.
-                        </Typography>
+        <>
+            <GlobalStyles styles={{
+                body: {
+                    margin: 0,
+                    background: 'linear-gradient(-45deg, #1976d2, #9c27b0, #00bcd4, #3f51b5)',
+                    backgroundSize: '400% 400%',
+                    animation: 'gradientBG 15s ease infinite',
+                    minHeight: '100vh',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: '"Poppins", "Roboto", sans-serif'
+                },
+                '@keyframes gradientBG': {
+                    '0%': { backgroundPosition: '0% 50%' },
+                    '50%': { backgroundPosition: '100% 50%' },
+                    '100%': { backgroundPosition: '0% 50%' },
+                }
+            }} />
 
-                        <TextField
-                            fullWidth
-                            label="Codice di attivazione"
-                            type="password"
-                            variant="outlined"
-                            value={inputCode}
-                            error={!!errorMsg}
-                            helperText={errorMsg}
-                            onChange={(e) => setInputCode(e.target.value)}
-                            sx={{ mb: 3 }}
-                            InputProps={{
-                                startAdornment: (
-                                    <InputAdornment position="start">
-                                        <LockIcon fontSize="small" />
-                                    </InputAdornment>
-                                ),
-                            }}
-                        />
-
-                        <Stack spacing={2}>
-                            <Button
-                                variant="contained"
-                                fullWidth
-                                size="large"
-                                onClick={handleTeacherActivation}
-                                disabled={!inputCode || loading}
-                            >
-                                Conferma e Attiva
-                            </Button>
-                            <Button variant="text" color="inherit" onClick={handleLogout}>
-                                Annulla
-                            </Button>
-                        </Stack>
-                    </Paper>
-                ) : (
-                    <Paper sx={{ p: 5, textAlign: 'center', borderRadius: 5, width: '100%', boxShadow: 4 }}>
-                        <Typography variant="h4" fontWeight="bold" sx={{ mb: 2 }}>
-                            {isTeacherSignup ? "Registrazione Docente" : "Login"}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-                            {isTeacherSignup
-                                ? "Accedi con Google per attivare il tuo pannello docente"
-                                : "Accedi con il tuo account Google per gestire le tue lezioni"}
-                        </Typography>
-                        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-                            <GoogleLogin
-                                onSuccess={handleLoginSuccess}
-                                onError={() => setErrorMsg("Login fallito. Riprova.")}
-                            />
+            <Container maxWidth="xs">
+                <Grow in timeout={800}>
+                    <Box sx={{ py: 4 }}>
+                        {/* Logo / Brand Header */}
+                        <Box sx={{ textAlign: 'center', mb: 4 }}>
+                            <Avatar sx={{
+                                bgcolor: 'rgba(255,255,255,0.2)',
+                                backdropFilter: 'blur(10px)',
+                                width: 70, height: 70, mx: 'auto', mb: 2,
+                                border: '1px solid rgba(255,255,255,0.3)'
+                            }}>
+                                <SchoolIcon sx={{ fontSize: 40, color: 'white' }} />
+                            </Avatar>
+                            <Typography variant="h4" sx={{ fontWeight: 900, color: 'white', letterSpacing: -1, textShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                                MyLessons
+                            </Typography>
                         </Box>
-                    </Paper>
-                )}
-            </Box>
-        </Container>
+
+                        <Paper elevation={0} sx={{
+                            p: { xs: 4, sm: 5 },
+                            borderRadius: 6,
+                            bgcolor: 'rgba(255, 255, 255, 0.92)',
+                            backdropFilter: 'blur(20px)',
+                            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+                            textAlign: 'center'
+                        }}>
+                            {loading ? (
+                                <Fade in>
+                                    <Box sx={{ py: 4 }}>
+                                        <CircularProgress size={50} thickness={5} sx={{ color: '#1976d2' }} />
+                                        <Typography sx={{ mt: 3, fontWeight: 600, color: 'text.secondary' }}>Verifica account...</Typography>
+                                    </Box>
+                                </Fade>
+                            ) : user && !showSecretField ? (
+                                <Box>
+                                    <Avatar src={user.picture} sx={{ width: 100, height: 100, mx: 'auto', mb: 3, border: '4px solid white', boxShadow: '0 10px 20px rgba(0,0,0,0.1)' }} />
+                                    <Typography variant="h5" sx={{ fontWeight: 800 }}>Ciao, {user.given_name}</Typography>
+                                    <Typography variant="body2" sx={{ color: 'text.secondary', mb: 4 }}>Profilo {user.role}</Typography>
+                                    <Stack spacing={2}>
+                                        <Button
+                                            variant="contained"
+                                            fullWidth
+                                            size="large"
+                                            endIcon={<ArrowForwardIcon />}
+                                            onClick={() => navigate('/dashboard')}
+                                            sx={{ borderRadius: 3, py: 1.8, fontWeight: 700, textTransform: 'none', boxShadow: '0 10px 20px rgba(25, 118, 210, 0.3)' }}
+                                        >
+                                            Entra nel portale
+                                        </Button>
+                                        <Button variant="text" color="inherit" onClick={handleLogout} sx={{ opacity: 0.7 }}>Cambia account</Button>
+                                    </Stack>
+                                </Box>
+                            ) : showSecretField ? (
+                                <Box>
+                                    <Typography variant="h5" sx={{ fontWeight: 800, mb: 1 }}>Attivazione Docente</Typography>
+                                    <Typography variant="body2" sx={{ color: 'text.secondary', mb: 4 }}>Inserisci il codice segreto per procedere</Typography>
+                                    <TextField
+                                        fullWidth
+                                        type="password"
+                                        placeholder="Codice Attivazione"
+                                        value={inputCode}
+                                        error={!!errorMsg}
+                                        helperText={errorMsg}
+                                        onChange={(e) => setInputCode(e.target.value)}
+                                        sx={{ mb: 3, '& .MuiOutlinedInput-root': { borderRadius: 4, bgcolor: '#f8f9fa' } }}
+                                        InputProps={{
+                                            startAdornment: <InputAdornment position="start"><LockIcon color="action" /></InputAdornment>,
+                                        }}
+                                    />
+                                    <Stack spacing={2}>
+                                        <Button
+                                            variant="contained"
+                                            fullWidth
+                                            size="large"
+                                            onClick={handleTeacherActivation}
+                                            sx={{ borderRadius: 3, py: 1.8, fontWeight: 700, bgcolor: '#9c27b0', '&:hover': { bgcolor: '#7b1fa2' } }}
+                                        >
+                                            Conferma Docente
+                                        </Button>
+                                        <Button variant="text" color="inherit" onClick={handleLogout}>Annulla</Button>
+                                    </Stack>
+                                </Box>
+                            ) : (
+                                <Box>
+                                    <Typography variant="h5" sx={{ fontWeight: 800, mb: 1 }}>
+                                        {isTeacherSignup ? "Registrazione Docente" : "Accedi"}
+                                    </Typography>
+                                    <Typography variant="body2" sx={{ color: 'text.secondary', mb: 5 }}>
+                                        Benvenuto! Usa il tuo account Google per iniziare.
+                                    </Typography>
+                                    <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1 }}>
+                                        <GoogleLogin
+                                            onSuccess={handleLoginSuccess}
+                                            onError={() => setErrorMsg("Login fallito. Riprova.")}
+                                            shape="pill"
+                                            theme="filled_blue"
+                                            size="large"
+                                            text={isTeacherSignup ? "signup_with" : "signin_with"}
+                                        />
+                                    </Box>
+                                </Box>
+                            )}
+                        </Paper>
+                        <Typography variant="caption" sx={{ display: 'block', textAlign: 'center', mt: 4, color: 'rgba(255,255,255,0.7)' }}>
+                            © 2026 DigitalCreation • Sistema di Gestione Didattica
+                        </Typography>
+                    </Box>
+                </Grow>
+            </Container>
+        </>
     );
 }
 
