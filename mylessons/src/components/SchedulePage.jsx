@@ -69,6 +69,8 @@ export default function SchedulePage() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
+    const [pendingChanges, setPendingChanges] = useState(false);
+    const [hadChangesBeforeEditing, setHadChangesBeforeEditing] = useState(false);
 
     const [localSchedules, setLocalSchedules] = useState([]);
     const [subscribers, setSubscribers] = useState([]);
@@ -119,10 +121,26 @@ export default function SchedulePage() {
     }, [getAuthData, navigate]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+    
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                console.log("Bentornato! Verifico la sessione...");
+                fetchData(); // Ricarica i dati e verifica il token automaticamente
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [fetchData]);
 
     const saveFullDay = async () => {
         const session = getAuthData();
-        if (!session?.id_token) return;
+        // Se non c'è sessione nei cookie, inutile procedere
+        if (!session?.id_token) {
+            navigate('/login');
+            return;
+        }
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
         setSaving(true);
@@ -195,6 +213,10 @@ export default function SchedulePage() {
 
         if (isOccupied) {
             const session = getAuthData();
+            if (!session?.id_token) {
+                navigate('/login');
+                return;
+            }
             try {
                 await fetch(APPS_SCRIPT_URL, {
                     method: 'POST',
@@ -254,7 +276,7 @@ export default function SchedulePage() {
         // 4. Aggiornamento Stato
         updated[globalIdx] = currentSlot;
         setLocalSchedules(updated);
-        setHasChanges(true);
+        setPendingChanges(true);
     };
 
     const handleClearFullDayLocal = () => {
@@ -286,6 +308,10 @@ export default function SchedulePage() {
 
     const handleResetForNewWeek = async () => {
         const session = getAuthData();
+        if (!session?.id_token) {
+            navigate('/login');
+            return;
+        }
         setSaving(true);
         try {
             const response = await fetch(APPS_SCRIPT_URL, {
@@ -412,7 +438,24 @@ export default function SchedulePage() {
                                                                     </Select>
                                                                 </FormControl>
 
-                                                                <Button fullWidth variant="contained" onClick={() => setEditingSlot(null)} sx={{ borderRadius: 3, textTransform: 'none', fontWeight: 'bold' }}>
+                                                                <Button
+                                                                    fullWidth
+                                                                    variant="contained"
+                                                                    onClick={() => {
+                                                                        // Il tasto SALVA appare se:
+                                                                        // 1. Abbiamo appena modificato questo slot (pendingChanges)
+                                                                        // 2. Avevamo già modificato altri slot in precedenza (hadChangesBeforeEditing)
+                                                                        if (pendingChanges || hadChangesBeforeEditing) {
+                                                                            setHasChanges(true);
+                                                                        }
+
+                                                                        // Reset degli stati di controllo
+                                                                        setEditingSlot(null);
+                                                                        setPendingChanges(false);
+                                                                        setHadChangesBeforeEditing(false);
+                                                                    }}
+                                                                    sx={{ borderRadius: 3, textTransform: 'none', fontWeight: 'bold' }}
+                                                                >
                                                                     Fatto
                                                                 </Button>
                                                             </Stack>
@@ -442,7 +485,15 @@ export default function SchedulePage() {
                                                                 </Box>
 
                                                                 <Stack direction="row">
-                                                                    <IconButton onClick={() => setEditingSlot(`${slot.globalIdx}`)}><EditIcon fontSize="small" color="primary" /></IconButton>
+                                                                    <IconButton onClick={() => {
+                                                                        // Salva se c'erano già modifiche salvate da altri slot
+                                                                        setHadChangesBeforeEditing(hasChanges);
+                                                                        setHasChanges(false);
+                                                                        setPendingChanges(false);
+                                                                        setEditingSlot(`${slot.globalIdx}`);
+                                                                    }}>
+                                                                        <EditIcon fontSize="small" color="primary" />
+                                                                    </IconButton>
                                                                     <IconButton onClick={() => handleRemoveSlotCompletely(slot.globalIdx)}><DeleteSweepIcon fontSize="small" color="error" /></IconButton>
                                                                 </Stack>
                                                             </Stack>

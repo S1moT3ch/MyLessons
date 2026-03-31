@@ -79,7 +79,10 @@ export default function StudentsManagementPage() {
 
     const handleConfirmPayment = async () => {
         const sessionStr = Cookies.get('user_session');
-        if (!sessionStr || !payDialog.student) return;
+        if (!sessionStr || !payDialog.student) {
+            navigate('/login');
+            return;
+        }
         const session = JSON.parse(sessionStr);
         const newDebtValue = Math.max(0, payDialog.student.lezioniDaPagare - payDialog.amountPaid);
 
@@ -108,7 +111,10 @@ export default function StudentsManagementPage() {
 
     const handleSaveRate = async () => {
         const sessionStr = Cookies.get('user_session');
-        if (!sessionStr || !rateDialog.student) return;
+        if (!sessionStr || !rateDialog.student) {
+            navigate('/login');
+            return;
+        }
         const session = JSON.parse(sessionStr);
 
         setIsSaving(true);

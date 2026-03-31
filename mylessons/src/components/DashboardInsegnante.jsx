@@ -36,7 +36,11 @@ export default function DashboardInsegnante() {
     }, [navigate]);
 
     const fetchSubscribers = useCallback(async () => {
-        if (!userData?.id_token) return;
+        // Se non c'è sessione nei cookie, inutile procedere
+        if (!userData?.id_token) {
+            navigate('/login');
+            return;
+        }
         setLoading(true);
         try {
             const url = `${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`;
@@ -49,7 +53,7 @@ export default function DashboardInsegnante() {
         } finally {
             setLoading(false);
         }
-    }, [userData, handleLogout]);
+    }, [userData, handleLogout, navigate]);
 
     useEffect(() => { fetchSubscribers(); }, [fetchSubscribers]);
 

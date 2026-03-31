@@ -44,7 +44,12 @@ export default function DashboardStudente() {
 
     const loadDashboardData = useCallback(async () => {
         const sessionStr = Cookies.get('user_session');
-        if (!sessionStr) { handleLogout(); return; }
+        if (!sessionStr) {
+            handleLogout();
+            navigate('/login');
+            return;
+        }
+
         const session = JSON.parse(sessionStr);
         setLoading(true);
         try {
@@ -62,7 +67,7 @@ export default function DashboardStudente() {
         } finally {
             setLoading(false);
         }
-    }, [handleLogout]);
+    }, [handleLogout, navigate]);
 
     useEffect(() => { loadDashboardData(); }, [loadDashboardData]);
 

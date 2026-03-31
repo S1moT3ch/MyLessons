@@ -38,7 +38,7 @@ function LoginPage() {
     const completeLogin = async (userData, token, selectedRole) => {
         const sessionData = { ...userData, id_token: token, role: selectedRole };
         Cookies.set('user_session', JSON.stringify(sessionData), {
-            expires: 1, secure: true, sameSite: 'strict'
+            expires: 1/24, secure: true, sameSite: 'strict'
         });
         setUser(sessionData);
         try {

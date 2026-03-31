@@ -63,7 +63,10 @@ export default function StudentSchedulePage() {
 
     const loadScheduleData = useCallback(async () => {
         const token = getAuthToken();
-        if (!token) return;
+        if (!token) {
+            navigate('/login');
+            return;
+        }
 
         if (viewMode === 'single' && !selectedTeacherName) {
             setSchedule([]);
@@ -84,7 +87,7 @@ export default function StudentSchedulePage() {
             }
         } catch (e) { console.error(e); }
         finally { setLoadingSchedule(false); }
-    }, [viewMode, selectedTeacherName, getAuthToken]);
+    }, [viewMode, selectedTeacherName, getAuthToken, navigate]);
 
     useEffect(() => {
         if (!loadingAnagrafica) loadScheduleData();
