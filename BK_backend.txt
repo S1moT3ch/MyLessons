@@ -1,0 +1,713 @@
+const SPREADSHEET_ID = "17RZrxa7JDhWd0k87iirsQyRgw7BHITsZmLlxtHd9-Ak";
+const SCHEDULE_FILE_ID = "18wneQH_rKonfhfJ_btFidGtKZPzWuTlAmbgA3E_IbiQ";
+const MY_CLIENT_ID = "379683469811-hs18j22vq9rnqvvl4a6kq0mvi8aenkao.apps.googleusercontent.com";
+var ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+const DAY_MAP = { 
+  "Lunedì": 0, "Martedì": 2, "Mercoledì": 4, 
+  "Giovedì": 6, "Venerdì": 8, "Sabato": 10 
+};
+
+/**
+ * Crea un calendario fisico sul tuo account, lo nomina per il docente e lo condivide.
+ * Ritorna l'ID del calendario creato.
+ */
+function createAndShareTeacherCalendar(teacherEmail, teacherName) {
+  try {
+    const calName = "Agenda Lezioni - " + teacherName;
+    
+    // 1. Creazione
+    const newCalendar = CalendarApp.createCalendar(calName, {
+      summary: "Calendario sincronizzato con LessonApp per " + teacherName,
+      timeZone: "Europe/Rome"
+    });
+
+    const calendarId = newCalendar.getId();
+    console.log("Calendario creato: " + calendarId);
+
+    // Aspettiamo 1 secondo per dare tempo a Google di registrare l'ID
+    Utilities.sleep(1000);
+
+    // 2. Condivisione ACL (Parametri corretti)
+    if (teacherEmail) {
+      const cleanEmail = teacherEmail.toLowerCase().trim();
+      
+      const resource = {
+        role: 'writer', // <--- 'writer' è il termine corretto per i permessi di modifica nelle API
+        scope: {
+          type: 'user',
+          value: cleanEmail
+        }
+      };
+
+      // Chiamata API avanzata
+      Calendar.Acl.insert(resource, calendarId, { sendNotifications: true });
+      console.log("ACL inserita correttamente per: " + cleanEmail);
+    }
+
+    return calendarId;
+  } catch (error) {
+    console.error("Errore completo: " + error.toString());
+    // Se fallisce l'ACL ma il calendario esiste, restituiamo comunque l'ID
+    // così almeno viene scritto nella colonna H e puoi condividerlo a mano
+    return (error.toString().includes("acl")) ? "ERROR_ACL_BUT_CREATED" : null;
+  }
+}
+
+function syncSchedulesToCalendar(calendarId, teacherName, allSchedules) {
+  if (!calendarId || !allSchedules) return;
+  try {
+    const calendar = CalendarApp.getCalendarById(calendarId);
+    if (!calendar) return;
+
+    const now = new Date();
+    const startWindow = new Date(now);
+    const dayOfWeek = now.getDay(); 
+    const diffToMonday = (dayOfWeek === 0) ? 0 : (dayOfWeek - 1);
+    startWindow.setDate(now.getDate() - diffToMonday);
+    startWindow.setHours(0, 0, 0, 0);
+    const endWindow = new Date(startWindow);
+    endWindow.setDate(startWindow.getDate() + 21); // Estesa a 3 settimane per sicurezza
+
+    const existingEvents = calendar.getEvents(startWindow, endWindow);
+    const calendarMap = {};
+
+    existingEvents.forEach(event => {
+      const desc = event.getDescription() || "";
+      if (desc.includes("[ID_LESSON_APP]")) {
+        // Estrazione fingerprint: cerchiamo tutto ciò che sta dopo [FP: e prima di ]
+        const match = desc.match(/\[FP:(.*?)\]/);
+        if (match && match[1]) {
+          calendarMap[match[1]] = event;
+        }
+      }
+    });
+
+    const fingerprintsToKeep = new Set();
+
+    allSchedules.forEach(slot => {
+      if (slot.email && slot.ora && slot.giorno) {
+        const startTime = getStartDateFromSlot(slot.giorno, slot.ora);
+        const duration = 60; 
+        const endTime = new Date(startTime.getTime() + duration * 60000);
+
+        // --- NORMALIZZAZIONE FINGERPRINT ---
+        // 1. Pulizia estrema dell'email e dell'ora
+        const cleanEmail = slot.email.toLowerCase().trim();
+        const cleanTime = slot.ora.replace(/[^0-9]/g, ''); // Forza formato numerico es. "1030"
+        const cleanDay = slot.giorno.toLowerCase().trim();
+        
+        // 2. Generazione Fingerprint (includendo l'ora specifica per distinguere slot adiacenti)
+        const fingerprint = `FP_${teacherName}_${cleanDay}_${cleanTime}_${cleanEmail}`
+                            .replace(/[^a-zA-Z0-9_]/g, ''); // Rimuove tutto tranne lettere, numeri e underscore
+
+        fingerprintsToKeep.add(fingerprint);
+
+        if (calendarMap[fingerprint]) {
+          console.log("MANTENGO: " + fingerprint);
+          delete calendarMap[fingerprint]; // Rimosso dalla lista dei "da cancellare"
+        } else {
+          console.log("CREO NUOVO: " + fingerprint);
+          const newEvent = calendar.createEvent(`${slot.nome || "Studente"}`, startTime, endTime, {
+            description: `Ragazzo: ${slot.email}\n[ID_LESSON_APP]\n[FP:${fingerprint}]`,
+            guests: slot.email,
+            sendInvites: true
+          });
+          newEvent.addPopupReminder(0);
+        }
+      }
+    });
+
+    // 4. CANCELLAZIONE: Solo ciò che non era presente nel nuovo invio
+    for (let fp in calendarMap) {
+      console.log("RIMUOVO OBSOLETO: " + fp);
+      calendarMap[fp].deleteEvent();
+    }
+
+  } catch (e) { 
+    console.error("Errore Sync: " + e.toString()); 
+  }
+}
+
+function getStartDateFromSlot(dayName, timeStr) {
+  const days = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+  const targetIdx = days.indexOf(dayName);
+  const now = new Date();
+  const currentDayOfWeek = now.getDay(); // 0 è Domenica, 1 Lunedì...
+
+  let baseDate = new Date(now);
+
+  // LOGICA SETTIMANALE:
+  // Se oggi è Domenica (0), la "settimana di riferimento" è già quella successiva.
+  // Se oggi è da Lunedì (1) a Sabato (6), la "settimana di riferimento" è quella attuale.
+  if (currentDayOfWeek === 0) {
+    // Siamo di domenica: calcoliamo le date partendo dal Lunedì successivo
+    // Portiamo la baseDate al Lunedì che sta per iniziare (domani)
+    baseDate.setDate(now.getDate() + 1);
+  } else {
+    // Siamo tra Lunedì e Sabato: la baseDate deve essere il Lunedì appena passato
+    baseDate.setDate(now.getDate() - (currentDayOfWeek - 1));
+  }
+
+  // Ora calcoliamo la data finale aggiungendo i giorni necessari rispetto al Lunedì di riferimento
+  // targetIdx - 1 perché targetIdx 1 (Lunedì) deve dare offset 0
+  const targetDate = new Date(baseDate);
+  targetDate.setDate(baseDate.getDate() + (targetIdx - 1));
+
+  // Impostazione orario
+  const [h, m] = timeStr.split(':');
+  targetDate.setHours(parseInt(h), parseInt(m), 0, 0);
+  
+  return targetDate;
+}
+
+/**
+ * Ottiene o crea il foglio dell'insegnante con intestazioni predefinite
+ */
+function getTeacherSheet(ss, teacherName) {
+  let sheet = ss.getSheetByName(teacherName);
+  if (!sheet) {
+    sheet = ss.insertSheet(teacherName);
+    // Creazione Intestazione per evitare fogli vuoti
+    const header = [];
+    for (let giorno in DAY_MAP) {
+      header[DAY_MAP[giorno]] = giorno;
+      header[DAY_MAP[giorno] + 1] = "Studente (Email)";
+    }
+    sheet.getRange(1, 1, 1, header.length).setValues([header]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function verifyToken(idToken) {
+  if (!idToken) return null;
+  try {
+    const response = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken);
+    const payload = JSON.parse(response.getContentText());
+    if (payload.aud !== MY_CLIENT_ID) return null;
+    return payload.email; 
+  } catch (e) {
+    console.error("Errore verifica token: " + e.toString());
+    return null;
+  }
+}
+
+function doGet(e) {
+  const action = e.parameter.action;
+  const idToken = e.parameter.token;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  try {
+    // --- 1. AZIONE PUBBLICA: Verifica Codice Docente (Hash) ---
+    if (action === "verifyTeacherCode") {
+      const inputHash = e.parameter.code; 
+      const savedHash = PropertiesService.getScriptProperties().getProperty('TEACHER_SECRET_CODE');
+      return createJsonResponse({ 
+        status: "success", 
+        isValid: (inputHash && inputHash === savedHash) 
+      });
+    }
+
+    // --- 2. AZIONE PUBBLICA: Elenco Insegnanti per Iscrizione ---
+    if (action === "getTeachers") {
+      const sheet = ss.getSheetByName("Insegnanti");
+      const data = sheet.getDataRange().getValues();
+      return createJsonResponse({ 
+        status: "success", 
+        data: data.slice(1).map(row => ({ id: row[0], email: row[1], name: row[2] + " " + row[3] }))
+      });
+    }
+
+    // --- 3. VERIFICA LOGIN INIZIALE (checkUser) ---
+    if (action === "checkUser") {
+      const loginEmail = e.parameter.email;
+      const sheets = ["Insegnanti", "Studenti"];
+      let foundRole = null;
+      for (let name of sheets) {
+        let sheet = ss.getSheetByName(name);
+        if (!sheet) continue;
+        let data = sheet.getDataRange().getValues();
+        let user = data.find(row => row[1] && row[1].toString().toLowerCase().trim() === loginEmail.toLowerCase().trim());
+        if (user) { 
+          foundRole = (name === "Insegnanti") ? "Insegnante" : "Studente"; 
+          break; 
+        }
+      }
+      return createJsonResponse({ exists: !!foundRole, role: foundRole });
+    }
+
+    // --- PROTEZIONE: Tutte le azioni seguenti richiedono Token Valido ---
+    const authenticatedEmail = verifyToken(idToken);
+    if (!authenticatedEmail) {
+      return createJsonResponse({ status: "error", message: "Non autorizzato: Sessione non valida" });
+    }
+
+    // --- 4. AGENDA PERSONALE STUDENTE (Ricerca Globale su tutti i fogli Docenti) ---
+    if (action === "getStudentPersonalSchedule") {
+      const studentEmail = authenticatedEmail.toLowerCase().trim();
+      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      const sheets = ssSchedule.getSheets();
+      const result = [];
+
+      sheets.forEach(sheet => {
+        const data = sheet.getDataRange().getValues();
+        const teacherName = sheet.getName();
+        for (let giorno in DAY_MAP) {
+          let colOra = DAY_MAP[giorno];
+          let colStudente = colOra + 1;
+          for (let r = 1; r < data.length; r++) {
+            let emailCella = data[r][colStudente] ? data[r][colStudente].toString().toLowerCase().trim() : "";
+            if (emailCella === studentEmail) {
+              result.push({
+                giorno: giorno,
+                ora: data[r][colOra].toString().trim(),
+                teacherName: teacherName
+              });
+            }
+          }
+        }
+      });
+      return createJsonResponse({ status: "success", data: result });
+    }
+
+    // --- 5. ISCRIZIONI DELLO STUDENTE (Quali corsi segue) ---
+    if (action === "getMySubscriptions") {
+      const sheet = ss.getSheetByName("Iscrizioni");
+      if (!sheet) return createJsonResponse({ status: "success", data: [] });
+      const data = sheet.getDataRange().getValues();
+      const mySubs = data.slice(1)
+        .filter(row => row[1].toString().toLowerCase().trim() === authenticatedEmail.toLowerCase().trim())
+        .map(row => ({ 
+          teacherId: row[2], 
+          teacherName: row[3], 
+          date: row[4] 
+        }));
+      return createJsonResponse({ status: "success", data: mySubs });
+    }
+
+    // --- 6. STUDENTI ISCRITTI (Vista Docente - Chi segue il mio corso) ---
+    if (action === "getTeacherSubscribers") {
+      const teacherId = e.parameter.teacherId;
+      const sheetIscrizioni = ss.getSheetByName("Iscrizioni");
+      const sheetStudenti = ss.getSheetByName("Studenti");
+      
+      if (!sheetIscrizioni || !sheetStudenti) return createJsonResponse({ status: "success", data: [] });
+
+      // 1. Apriamo il file degli orari per il conteggio settimanale
+      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      const allScheduleSheets = ssSchedule.getSheets();
+      const weeklyCounts = {};
+
+      // Conteggio delle occorrenze di ogni email negli orari correnti
+      allScheduleSheets.forEach(s => {
+        const data = s.getDataRange().getValues();
+        for (let r = 1; r < data.length; r++) {
+          // Controlliamo le colonne delle email (colonne B, D, F, H, J, L -> indici 1, 3, 5, 7, 9, 11)
+          for (let c = 1; c < data[0].length; c += 2) {
+            const email = data[r][c] ? data[r][c].toString().toLowerCase().trim() : "";
+            if (email) {
+              weeklyCounts[email] = (weeklyCounts[email] || 0) + 1;
+            }
+          }
+        }
+      });
+
+      const iscrizioni = sheetIscrizioni.getDataRange().getValues().slice(1);
+      const studenti = sheetStudenti.getDataRange().getValues().slice(1);
+      
+      const nomiStudenti = {};
+      studenti.forEach(r => { 
+        nomiStudenti[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; 
+      });
+
+      const result = iscrizioni
+        .filter(row => row[2].toString() === teacherId.toString())
+        .map(row => {
+          const email = row[1].toLowerCase().trim();
+          return {
+            studentName: nomiStudenti[email] || "Sconosciuto",
+            studentEmail: row[1],
+            date: row[4],
+            // Questo è il valore che mancava e che causava "undefined"
+            lessonCount: weeklyCounts[email] || 0, 
+            // Valori storici persistenti salvati nelle colonne F e G
+            lezioniSvolte: row[5] || 0,
+            lezioniDaPagare: row[6] || 0,
+            tariffa: row[7] || 0
+          };
+        });
+
+      return createJsonResponse({ status: "success", data: result });
+    }
+
+    // --- 7. AGENDA COMPLETA DOCENTE (Dal proprio foglio specifico) ---
+    if (action === "getStudentSchedules") {
+      const teacherName = e.parameter.teacherName;
+      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      const sheetOrari = getTeacherSheet(ssSchedule, teacherName);
+      const data = sheetOrari.getDataRange().getValues();
+
+      const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const studentiData = ssMain.getSheetByName("Studenti").getDataRange().getValues().slice(1);
+      const nomiMap = {};
+      studentiData.forEach(r => { if(r[1]) nomiMap[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; });
+
+      const result = [];
+      for (let giorno in DAY_MAP) {
+        let colOra = DAY_MAP[giorno];
+        let colStudente = colOra + 1;
+        for (let r = 1; r < data.length; r++) {
+          if (data[r][colOra]) {
+            let email = data[r][colStudente] ? data[r][colStudente].toString().toLowerCase().trim() : "";
+            result.push({
+              giorno: giorno,
+              ora: data[r][colOra].toString().trim(),
+              email: email,
+              nome: nomiMap[email] || email
+            });
+          }
+        }
+      }
+      return createJsonResponse({ status: "success", data: result });
+    }
+
+    if (action === "getStudentBalances") {
+      const studentEmail = e.parameter.studentEmail.toLowerCase().trim();
+      const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
+      const data = sheetIscrizioni.getDataRange().getValues().slice(1);
+      
+      // Mappa degli insegnanti per convertire l'ID nel Nome reale (se presente)
+      const sheetInsegnanti = ssMain.getSheetByName("Insegnanti");
+      const insegnantiData = sheetInsegnanti ? sheetInsegnanti.getDataRange().getValues() : [];
+      const nomiInsegnanti = {};
+      insegnantiData.forEach(r => nomiInsegnanti[r[0]] = r[1]); 
+
+      const result = data
+        .filter(row => row[1].toString().toLowerCase().trim() === studentEmail)
+        .map(row => {
+          const lezioniDaPagare = Number(row[6]) || 0; // Col G
+          const tariffa = Number(row[7]) || 0;         // Col H
+          
+          return {
+            teacherName: row[3] || nomiInsegnanti[row[2]] || "Insegnante", // Col D o lookup
+            lezioniSvolte: Number(row[5]) || 0,        // Col F
+            lezioniDaPagare: lezioniDaPagare,          // Col G
+            amountDue: lezioniDaPagare * tariffa       // <-- CALCOLO ESEGUITO QUI
+          };
+        });
+        
+      return createJsonResponse({ status: "success", data: result });
+    }
+
+    return createJsonResponse({ status: "error", message: "Azione non riconosciuta" });
+
+  } catch (error) { 
+    return createJsonResponse({ status: "error", message: error.toString() }); 
+  }
+}
+
+function doPost(e) {
+  console.log("--- NUOVA RICHIESTA POST RICEVUTA ---");
+  try {
+    const requestData = JSON.parse(e.postData.contents);
+    const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const action = requestData.action;
+    const authenticatedEmail = verifyToken(requestData.id_token);
+
+    if (action === "saveFullSchedule") {
+      if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+      
+      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      const sheet = getTeacherSheet(ssSchedule, requestData.teacherName);
+      const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
+      const teacherName = requestData.teacherName;
+
+      // Recupero CalendarID per la sincronizzazione
+      const sheetInsegnanti = ssMain.getSheetByName("Insegnanti");
+      const insData = sheetInsegnanti.getDataRange().getValues();
+      let calendarId = null;
+      for(let i=1; i<insData.length; i++) {
+        if (insData[i][1] === authenticatedEmail) {
+          calendarId = insData[i][7]; // Colonna H
+          break;
+        }
+      }
+      
+      // 1. FOTO DELLA SITUAZIONE ATTUALE (Prima del salvataggio)
+      const oldData = sheet.getDataRange().getValues();
+      const oldAssignments = {}; 
+      
+      for (let giorno in DAY_MAP) {
+        let colOra = DAY_MAP[giorno];
+        for (let r = 1; r < oldData.length; r++) {
+          let ora = oldData[r][colOra];
+          let email = oldData[r][colOra + 1] ? oldData[r][colOra + 1].toString().toLowerCase().trim() : "";
+          if (ora && email) oldAssignments[`${giorno}-${ora}`] = email;
+        }
+      }
+
+      const allSchedules = requestData.allSchedules; 
+      const netChanges = {}; // Mappa dei cambiamenti netti { email: +1 o -1 }
+
+      // 2. CALCOLO DIFFERENZE (Logica corretta)
+      allSchedules.forEach(item => {
+        const key = `${item.giorno}-${item.ora}`;
+        const newEmail = item.email ? item.email.toLowerCase().trim() : "";
+        const oldEmail = oldAssignments[key] || "";
+
+        if (newEmail !== oldEmail) {
+          // Se c'era qualcuno e ora non c'è più (o c'è un altro), togliamo 1 al vecchio
+          if (oldEmail !== "") {
+            netChanges[oldEmail] = (netChanges[oldEmail] || 0) - 1;
+          }
+          // Se ora c'è qualcuno, aggiungiamo 1 al nuovo
+          if (newEmail !== "") {
+            netChanges[newEmail] = (netChanges[newEmail] || 0) + 1;
+          }
+        }
+      });
+
+      // 3. AGGIORNAMENTO PERSISTENTE NELLO SHEET ISCRIZIONI
+      if (Object.keys(netChanges).length > 0) {
+        const iscrizioniRange = sheetIscrizioni.getDataRange();
+        const iscrizioniValues = iscrizioniRange.getValues();
+        
+        for (let email in netChanges) {
+          if (netChanges[email] === 0) continue; 
+
+          for (let i = 1; i < iscrizioniValues.length; i++) {
+            // Verifica Email (Col B)
+            if (iscrizioniValues[i][1].toLowerCase().trim() === email) {
+              let currentSvolte = Number(iscrizioniValues[i][5]) || 0; // Col F (Svolte)
+              let currentDaPagare = Number(iscrizioniValues[i][6]) || 0; // Col G (Da Pagare)
+              
+              // Applichiamo il cambiamento calcolato
+              sheetIscrizioni.getRange(i + 1, 6).setValue(Math.max(0, currentSvolte + netChanges[email]));
+              sheetIscrizioni.getRange(i + 1, 7).setValue(Math.max(0, currentDaPagare + netChanges[email]));
+            }
+          }
+        }
+      }
+
+      // 4. SCRITTURA FISICA SUL FOGLIO ORARI (Sostituzione integrale)
+      for (let giorno in DAY_MAP) {
+        let colOraIndex = DAY_MAP[giorno] + 1;
+        sheet.getRange(2, colOraIndex, 50, 2).clearContent(); 
+      }
+
+      const dataByDay = {};
+      allSchedules.forEach(item => {
+        if (!dataByDay[item.giorno]) dataByDay[item.giorno] = [];
+        dataByDay[item.giorno].push(item);
+      });
+
+      for (let giorno in dataByDay) {
+        let startCol = DAY_MAP[giorno] + 1;
+        let dayItems = dataByDay[giorno].sort((a, b) => a.ora.localeCompare(b.ora));
+        dayItems.forEach((item, index) => {
+          let rowNum = index + 2;
+          sheet.getRange(rowNum, startCol).setValue(item.ora);
+          sheet.getRange(rowNum, startCol + 1).setValue(item.email);
+        });
+      }
+
+      if (calendarId) {
+        syncSchedulesToCalendar(calendarId, teacherName, allSchedules);
+      }
+
+      return createTextResponse("Success");
+    }
+
+    if (action === "updatePaidLessons") {
+        if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+        const sheet = ssMain.getSheetByName("Iscrizioni");
+        const data = sheet.getDataRange().getValues();
+        let rowIndex = -1;
+        for (let i = 1; i < data.length; i++) {
+          if (data[i][1].toString().toLowerCase().trim() === requestData.studentEmail.toLowerCase().trim() && data[i][2].toString() === requestData.teacherId.toString()) {
+            rowIndex = i + 1; break;
+          }
+        }
+        if (rowIndex !== -1) {
+          sheet.getRange(rowIndex, 7).setValue(requestData.newPaidValue);
+          return createTextResponse("Success");
+        }
+        return createTextResponse("Error: Non trovato");
+      }
+
+        if (action === "updateStudentRate") {
+          if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+          const sheet = ssMain.getSheetByName("Iscrizioni");
+          const data = sheet.getDataRange().getValues();
+          let rowIndex = -1;
+
+          for (let i = 1; i < data.length; i++) {
+              if (data[i][1].toString().toLowerCase().trim() === requestData.studentEmail.toLowerCase().trim() && 
+                  data[i][2].toString() === requestData.teacherId.toString()) {
+                  rowIndex = i + 1; 
+                  break;
+              }
+          }
+
+          if (rowIndex !== -1) {
+              // Colonna H è l'ottava colonna (indice 8)
+              sheet.getRange(rowIndex, 8).setValue(requestData.newRate);
+              return createTextResponse("Success");
+          }
+          return createTextResponse("Error: Non trovato");
+    }
+
+    if (action === "resetScheduleForNewWeek") {
+      if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+      
+      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      const teacherName = requestData.teacherName;
+      const sheet = getTeacherSheet(ssSchedule, teacherName);
+      
+      // 1. Pulizia fisica del foglio (colonne email)
+      for (let giorno in DAY_MAP) {
+        let colEmailIndex = DAY_MAP[giorno] + 2; 
+        sheet.getRange(2, colEmailIndex, 50, 1).clearContent();
+      }
+
+      // 2. Recupero del CalendarID per sincronizzare la cancellazione
+      const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const sheetInsegnanti = ssMain.getSheetByName("Insegnanti");
+      const insData = sheetInsegnanti.getDataRange().getValues();
+      let calendarId = null;
+      
+      for(let i=1; i<insData.length; i++) {
+        if (insData[i][1] === authenticatedEmail) {
+          calendarId = insData[i][7]; // Colonna H
+          break;
+        }
+      }
+
+      // 3. Sincronizzazione col Calendario
+      if (calendarId) {
+        // Passiamo un array vuoto [] come allSchedules. 
+        // La funzione syncSchedulesToCalendar vedrà che non ci sono più slot nel "nuovo" schedule
+        // e procederà a eliminare tutti gli eventi con [ID_LESSON_APP] dal calendario.
+        syncSchedulesToCalendar(calendarId, teacherName, []);
+        console.log("Calendario resettato per: " + teacherName);
+      }
+      
+      return createTextResponse("Success");
+    }
+
+    if (action === "removeSlotAndDecrement") {
+      const data = JSON.parse(e.postData.contents);
+      const { studentEmail, teacherName } = data;
+      
+      if (!studentEmail) return createTextResponse("Success: Slot vuoto rimosso");
+
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const sheetIscrizioni = ss.getSheetByName("Iscrizioni");
+      const rows = sheetIscrizioni.getDataRange().getValues();
+      
+      for (let i = 1; i < rows.length; i++) {
+        // Cerchiamo la riga che corrisponde a Studente + Insegnante
+        if (rows[i][1] === studentEmail && rows[i][3] === teacherName) {
+          // Decrementiamo Svolte (Col F/5) e Da Pagare (Col G/6)
+          let svolte = Math.max(0, rows[i][5] - 1);
+          let daPagare = Math.max(0, rows[i][6] - 1);
+          
+          sheetIscrizioni.getRange(i + 1, 6).setValue(svolte);
+          sheetIscrizioni.getRange(i + 1, 7).setValue(daPagare);
+          break;
+        }
+      }
+      return createTextResponse("Success: Contatori aggiornati");
+    }
+
+    if (action === "subscribe") {
+      if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+      const sheet = ssMain.getSheetByName("Iscrizioni");
+      sheet.appendRow([requestData.studentId, authenticatedEmail, requestData.teacherId, requestData.teacherName, new Date(), 0, 0]);
+      return createTextResponse("Success");
+    }
+
+    if (requestData.id_token && !action) {
+      console.log("Entrato nel blocco Registrazione/Login");
+      // 1. Recupero dati da Google Token
+      const tokenResponse = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + requestData.id_token);
+      const googleUser = JSON.parse(tokenResponse.getContentText());
+      
+      const role = requestData.role;
+      const teacherEmail = googleUser.email; // Verifichiamo che questa non sia undefined
+      const teacherFullName = googleUser.given_name + " " + googleUser.family_name;
+
+      console.log("Accesso rilevato per: " + teacherEmail + " con ruolo: " + role);
+
+      let sheet = ssMain.getSheetByName(role === "Insegnante" ? "Insegnanti" : "Studenti");
+      const data = sheet.getDataRange().getValues();
+      let userRowIndex = -1;
+      let existingCalId = "";
+
+      // 2. Ricerca utente e Calendar ID esistente
+      for (let i = 0; i < data.length; i++) { 
+        if (data[i][0] === googleUser.sub) { 
+          userRowIndex = i + 1; 
+          if (role === "Insegnante") {
+             // Prendiamo l'ID dalla colonna H (indice 7) se esiste
+             existingCalId = data[i][7] || ""; 
+          }
+          break; 
+        } 
+      }
+
+      let calId = existingCalId;
+
+      // 3. Logica specifica per l'Insegnante (Creazione + Condivisione)
+      if (role === "Insegnante") {
+        if (!calId || calId === "") {
+          console.log("ID Calendario mancante. Avvio creazione e condivisione per: " + teacherEmail);
+          
+          // PASSIAMO L'EMAIL ESPLICITAMENTE
+          calId = createAndShareTeacherCalendar(teacherEmail, teacherFullName);
+        } else {
+          console.log("L'insegnante ha già un calendario associato: " + calId);
+        }
+
+        // Inizializza comunque il foglio orari fisico
+        const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+        getTeacherSheet(ssSchedule, teacherFullName);
+      }
+
+      // 4. Preparazione riga dati (8 colonne)
+      // Forza la costruzione di un array di ESATTAMENTE 8 elementi
+      const rowData = [
+        googleUser.sub,          // Col A (0)
+        teacherEmail,            // Col B (1)
+        googleUser.given_name,   // Col C (2)
+        googleUser.family_name,  // Col D (3)
+        googleUser.picture,      // Col E (4)
+        new Date(),              // Col F (5)
+        role,                    // Col G (6)
+        calId || ""              // Col H (7) 
+      ];
+
+      if (userRowIndex !== -1) {
+        // Aggiorna la riga esistente assicurandoti di coprire fino alla colonna 8 (H)
+        sheet.getRange(userRowIndex, 1, 1, 8).setValues([rowData]);
+        console.log("Riga aggiornata per docente con CalID: " + calId);
+      } else {
+        sheet.appendRow(rowData);
+        console.log("Nuova riga aggiunta per docente con CalID: " + calId);
+      }
+
+      return createTextResponse("Success");
+    }
+  } catch (error) { return createTextResponse("Error: " + error.toString()); }
+}
+
+function forzaAutorizzazione() {
+  CalendarApp.getDefaultCalendar().getName();
+  SpreadsheetApp.getActiveSpreadsheet().getName();
+  console.log("Autorizzazione completata con successo!");
+}
+
+function createTextResponse(msg) { return ContentService.createTextOutput(msg).setMimeType(ContentService.MimeType.TEXT); }
+function createJsonResponse(data) { return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON); }

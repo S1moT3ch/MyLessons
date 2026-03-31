@@ -210,17 +210,51 @@ export default function SchedulePage() {
         }
     };
 
-    const handleUpdateLocalSlot = (email, globalIdx) => {
-        const student = subscribers.find(s => s.studentEmail.toLowerCase() === email.toLowerCase());
+    const handleUpdateLocalSlot = (studentEmail, globalIdx, action = "add", studentIdx = null) => {
         const updated = [...localSchedules];
-        updated[globalIdx] = {
-            ...updated[globalIdx],
-            email: email,
-            nome: student ? student.studentName : (email === "" ? "" : email)
-        };
+        // Usiamo una copia profonda per evitare problemi di riferimento
+        const currentSlot = { ...updated[globalIdx] };
+
+        // 1. Inizializzazione Array (Compatibilità dati vecchi/nuovi)
+        if (!currentSlot.students) {
+            // Se c'è una stringa email con virgole, la splittiamo, altrimenti usiamo il singolo valore
+            if (currentSlot.email && currentSlot.email.includes(",")) {
+                const emails = currentSlot.email.split(",");
+                const nomi = currentSlot.nome ? currentSlot.nome.split(",") : [];
+                currentSlot.students = emails.map((em, i) => ({
+                    email: em.trim(),
+                    nome: nomi[i] ? nomi[i].trim() : em.trim()
+                }));
+            } else {
+                currentSlot.students = currentSlot.email
+                    ? [{ email: currentSlot.email, nome: currentSlot.nome }]
+                    : [];
+            }
+        }
+
+        // 2. Logica di Aggiunta/Rimozione
+        if (action === "add") {
+            const student = subscribers.find(s => s.studentEmail.toLowerCase() === studentEmail.toLowerCase());
+            // Verifichiamo che lo studente esista e non sia già presente nell'elenco di questo slot
+            if (student && !currentSlot.students.find(s => s.email.toLowerCase() === studentEmail.toLowerCase())) {
+                currentSlot.students.push({
+                    email: student.studentEmail,
+                    nome: student.studentName
+                });
+            }
+        } else if (action === "remove") {
+            currentSlot.students.splice(studentIdx, 1);
+        }
+
+        // 3. SERIALIZZAZIONE PER IL BACKEND (Punto cruciale)
+        // Trasformiamo l'array in stringhe separate da virgola che Apps Script può processare
+        currentSlot.email = currentSlot.students.map(s => s.email).join(",");
+        currentSlot.nome = currentSlot.students.map(s => s.nome).join(", ");
+
+        // 4. Aggiornamento Stato
+        updated[globalIdx] = currentSlot;
         setLocalSchedules(updated);
         setHasChanges(true);
-        setEditingSlot(null);
     };
 
     const handleClearFullDayLocal = () => {
@@ -317,47 +351,96 @@ export default function SchedulePage() {
                                 </Stack>
                                 <Stack spacing={1.5}>
                                     {lessons.map((slot) => {
-                                        const isOccupied = slot.email !== "";
                                         const isEditing = editingSlot === `${slot.globalIdx}`;
+                                        const hasStudents = slot.students && slot.students.length > 0;
 
                                         return (
-                                            <Card key={slot.globalIdx} elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: isEditing ? 'primary.main' : '#e0e0e0' }}>
-                                                <Box sx={{ display: 'flex', minHeight: 70 }}>
-                                                    <Box sx={{ p: 1, minWidth: 75, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid #eee', bgcolor: '#fafafa' }}>
+                                            <Card key={slot.globalIdx} elevation={0} sx={{ borderRadius: 4, border: '1px solid', borderColor: isEditing ? 'primary.main' : '#e0e0e0', mb: 1.5, overflow: 'hidden' }}>
+                                                <Box sx={{ display: 'flex', flexDirection: isEditing ? 'column' : 'row' }}>
+
+                                                    {/* Sezione Orario (Sempre visibile) */}
+                                                    <Box sx={{
+                                                        p: 1,
+                                                        minWidth: isEditing ? '100%' : 75,
+                                                        display: 'flex',
+                                                        flexDirection: isEditing ? 'row' : 'column',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        borderRight: isEditing ? 'none' : '1px solid #eee',
+                                                        borderBottom: isEditing ? '1px solid #eee' : 'none',
+                                                        bgcolor: '#fafafa',
+                                                        gap: isEditing ? 2 : 0
+                                                    }}>
                                                         <Typography variant="body2" fontWeight="800">{slot.ora}</Typography>
                                                         <IconButton size="small" onClick={() => { setTimeData({ old: slot.ora, new: slot.ora, index: slot.globalIdx }); setOpenTimeDialog(true); }}>
                                                             <AccessTimeFilledIcon sx={{ fontSize: 16 }} />
                                                         </IconButton>
+                                                        {isEditing && <Typography variant="caption" fontWeight="bold" color="primary">MODIFICA PARTECIPANTI</Typography>}
                                                     </Box>
 
-                                                    <Box sx={{ p: 1, px: 2, flexGrow: 1, display: 'flex', alignItems: 'center' }}>
+                                                    {/* Sezione Studenti */}
+                                                    <Box sx={{ p: 1.5, flexGrow: 1 }}>
                                                         {isEditing ? (
-                                                            <FormControl fullWidth size="small">
-                                                                <Select
-                                                                    value={slot.email || ""}
-                                                                    onChange={(e) => handleUpdateLocalSlot(e.target.value, slot.globalIdx)}
-                                                                >
-                                                                    <MenuItem value=""><em>Libero (Rimuovi)</em></MenuItem>
-                                                                    {subscribers.map((sub) => (
-                                                                        <MenuItem key={sub.studentEmail} value={sub.studentEmail}>
-                                                                            {sub.studentName}
-                                                                        </MenuItem>
+                                                            <Stack spacing={2}>
+                                                                {/* Lista Partecipanti con tasto rimozione */}
+                                                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                                                    {(slot.students || []).map((s, idx) => (
+                                                                        <Paper key={idx} variant="outlined" sx={{ p: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 2, bgcolor: '#fdfdfd' }}>
+                                                                            <Stack direction="row" spacing={1} alignItems="center">
+                                                                                <Avatar sx={{ width: 24, height: 24, fontSize: 12 }}>{s.nome[0]}</Avatar>
+                                                                                <Typography variant="body2" fontWeight="700">{s.nome}</Typography>
+                                                                            </Stack>
+                                                                            <IconButton size="small" color="error" onClick={() => handleUpdateLocalSlot(null, slot.globalIdx, "remove", idx)}>
+                                                                                <DeleteSweepIcon fontSize="small" />
+                                                                            </IconButton>
+                                                                        </Paper>
                                                                     ))}
-                                                                </Select>
-                                                            </FormControl>
+                                                                </Box>
+
+                                                                {/* Selettore Aggiunta */}
+                                                                <FormControl fullWidth size="small">
+                                                                    <Select
+                                                                        value=""
+                                                                        displayEmpty
+                                                                        onChange={(e) => handleUpdateLocalSlot(e.target.value, slot.globalIdx, "add")}
+                                                                        sx={{ borderRadius: 3 }}
+                                                                    >
+                                                                        <MenuItem value="" disabled><em>+ Aggiungi studente...</em></MenuItem>
+                                                                        {subscribers.map((sub) => (
+                                                                            <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem>
+                                                                        ))}
+                                                                    </Select>
+                                                                </FormControl>
+
+                                                                <Button fullWidth variant="contained" onClick={() => setEditingSlot(null)} sx={{ borderRadius: 3, textTransform: 'none', fontWeight: 'bold' }}>
+                                                                    Fatto
+                                                                </Button>
+                                                            </Stack>
                                                         ) : (
-                                                            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
-                                                                <Box sx={{ flexGrow: 1 }}>
-                                                                    {isOccupied ? (
-                                                                        <Chip
-                                                                            label={slot.nome}
-                                                                            avatar={<Avatar sx={{ width: 24, height: 24 }}>{slot.nome[0]}</Avatar>}
-                                                                            sx={{ bgcolor: getStudentColor(slot.email), color: 'white', fontWeight: 'bold' }}
-                                                                        />
+                                                            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                                                                {/* Chip con scorrimento orizzontale su Mobile */}
+                                                                <Box sx={{
+                                                                    flexGrow: 1,
+                                                                    display: 'flex',
+                                                                    overflowX: 'auto',
+                                                                    gap: 0.5,
+                                                                    py: 0.5,
+                                                                    '&::-webkit-scrollbar': { display: 'none' } // Nasconde scrollbar
+                                                                }}>
+                                                                    {hasStudents ? (
+                                                                        slot.students.map((s, idx) => (
+                                                                            <Chip
+                                                                                key={idx}
+                                                                                label={s.nome.split(' ')[0]} // Solo nome per risparmiare spazio
+                                                                                size="small"
+                                                                                sx={{ bgcolor: getStudentColor(s.email), color: 'white', fontWeight: 'bold', flexShrink: 0 }}
+                                                                            />
+                                                                        ))
                                                                     ) : (
                                                                         <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Disponibile</Typography>
                                                                     )}
                                                                 </Box>
+
                                                                 <Stack direction="row">
                                                                     <IconButton onClick={() => setEditingSlot(`${slot.globalIdx}`)}><EditIcon fontSize="small" color="primary" /></IconButton>
                                                                     <IconButton onClick={() => handleRemoveSlotCompletely(slot.globalIdx)}><DeleteSweepIcon fontSize="small" color="error" /></IconButton>
