@@ -4,7 +4,7 @@ import {
     Card, Stack, Chip, Avatar, useTheme, useMediaQuery,
     ToggleButton, ToggleButtonGroup, Button, Dialog,
     DialogTitle, DialogContent, DialogActions, FormControl,
-    Select, MenuItem, TextField, Fab, Zoom, Paper
+    Select, MenuItem, TextField, Fab, Zoom, Paper, LinearProgress
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
@@ -95,12 +95,14 @@ export default function SchedulePage() {
         try { return JSON.parse(sessionStr); } catch (e) { return null; }
     }, []);
 
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (isSilent = false) => {
         const session = getAuthData();
         if (!session?.id_token) return navigate('/login');
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
-        setLoading(true);
+        // Mostriamo la rotellina solo se NON è un caricamento silenzioso
+        if (!isSilent) setLoading(true);
+
         try {
             const [resSched, resSubs] = await Promise.all([
                 fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`),
@@ -112,11 +114,13 @@ export default function SchedulePage() {
 
             if (dataSched.status === "success") setLocalSchedules(dataSched.data);
             if (dataSubs.status === "success") setSubscribers(dataSubs.data);
+
+            // Importante: resettiamo hasChanges solo se il salvataggio è andato a buon fine
             setHasChanges(false);
         } catch (error) {
             console.error("Errore recupero dati:", error);
         } finally {
-            setLoading(false);
+            if (!isSilent) setLoading(false);
         }
     }, [getAuthData, navigate]);
 
@@ -135,15 +139,19 @@ export default function SchedulePage() {
     }, [fetchData]);
 
     const saveFullDay = async () => {
+        if (saving) return;
+
         const session = getAuthData();
-        // Se non c'è sessione nei cookie, inutile procedere
         if (!session?.id_token) {
-            navigate('/login');
+            window.location.href = '/login';
             return;
         }
-        const teacherFullName = `${session.given_name} ${session.family_name}`;
 
         setSaving(true);
+
+        // Non resettiamo hasChanges qui!
+        // Lo lasciamo true così il tasto resta visibile in stato "Invio..."
+
         try {
             const response = await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
@@ -152,20 +160,33 @@ export default function SchedulePage() {
                 body: JSON.stringify({
                     action: "saveFullSchedule",
                     id_token: session.id_token,
-                    teacherName: teacherFullName,
+                    teacherName: `${session.given_name} ${session.family_name}`,
                     allSchedules: localSchedules
                 })
             });
 
             const resultText = await response.text();
+
             if (resultText.includes("Success")) {
-                setHasChanges(false);
-                fetchData();
+                // Se l'invio ha successo, sincronizziamo i dati dal server
+                await fetchData(true);
+
+                // IMPORTANTE: Resettiamo hasChanges solo se nel frattempo
+                // l'utente non ha aperto altri slot (pendingChanges è false)
+                if (!pendingChanges) {
+                    setHasChanges(false);
+                }
+            } else {
+                setHasChanges(true);
+                alert("Errore nel salvataggio.");
             }
         } catch (e) {
-            alert("Errore di connessione.");
+            setHasChanges(true);
+            alert("Errore di rete.");
         } finally {
             setSaving(false);
+            // Se durante il caricamento l'utente ha cliccato "Fatto" su un altro slot,
+            // hasChanges sarà tornato true e il tasto diventerà di nuovo cliccabile.
         }
     };
 
@@ -332,6 +353,19 @@ export default function SchedulePage() {
 
     return (
         <Box sx={{ p: isMobile ? 1.5 : 3, pb: isMobile ? 22 : 12, maxWidth: 650, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh' }}>
+            {/* BARRA DI PROGRESSO ATTECCATA IN ALTO */}
+            {/* Appare solo quando saving è true */}
+            <Box sx={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 2000, // Sopra a tutto
+                height: 4
+            }}>
+                {saving && <LinearProgress color="success" sx={{ height: 4 }} />}
+            </Box>
+
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
@@ -442,14 +476,9 @@ export default function SchedulePage() {
                                                                     fullWidth
                                                                     variant="contained"
                                                                     onClick={() => {
-                                                                        // Il tasto SALVA appare se:
-                                                                        // 1. Abbiamo appena modificato questo slot (pendingChanges)
-                                                                        // 2. Avevamo già modificato altri slot in precedenza (hadChangesBeforeEditing)
                                                                         if (pendingChanges || hadChangesBeforeEditing) {
-                                                                            setHasChanges(true);
+                                                                            setHasChanges(true); // Questo riattiva il tasto anche se saving è true
                                                                         }
-
-                                                                        // Reset degli stati di controllo
                                                                         setEditingSlot(null);
                                                                         setPendingChanges(false);
                                                                         setHadChangesBeforeEditing(false);
@@ -486,9 +515,11 @@ export default function SchedulePage() {
 
                                                                 <Stack direction="row">
                                                                     <IconButton onClick={() => {
-                                                                        // Salva se c'erano già modifiche salvate da altri slot
                                                                         setHadChangesBeforeEditing(hasChanges);
-                                                                        setHasChanges(false);
+                                                                        // NON resettiamo hasChanges qui se saving è true,
+                                                                        // altrimenti il tasto "Invio..." sparirebbe mentre salva
+                                                                        if (!saving) setHasChanges(false);
+
                                                                         setPendingChanges(false);
                                                                         setEditingSlot(`${slot.globalIdx}`);
                                                                     }}>
@@ -563,9 +594,35 @@ export default function SchedulePage() {
 
             <Zoom in={hasChanges}>
                 <Box sx={{ position: 'fixed', bottom: isMobile ? 110 : 30, right: 30, zIndex: 3000, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Fab color="error" size="small" onClick={() => fetchData()}><RefreshIcon /></Fab>
-                    <Fab color="success" variant="extended" onClick={saveFullDay} disabled={saving}>
-                        {saving ? <CircularProgress size={24} color="inherit" /> : <><SaveIcon sx={{ mr: 1 }} /> SALVA</>}
+
+                    {/* Tasto REFRESH: disabilitato se stiamo salvando */}
+                    <Fab color="error" size="small" onClick={() => fetchData()} disabled={saving}>
+                        <RefreshIcon />
+                    </Fab>
+
+                    {/* Tasto SALVA:
+            - Se saving è true: mostra la rotellina e non è cliccabile.
+            - Appena saving torna false, se hasChanges è ancora true (perché hai fatto altre modifiche),
+              il tasto torna verde e cliccabile per il secondo invio.
+        */}
+                    <Fab
+                        color="success"
+                        variant="extended"
+                        onClick={saveFullDay}
+                        disabled={saving}
+                        sx={{ minWidth: 150, boxShadow: 4 }}
+                    >
+                        {saving ? (
+                            <>
+                                <CircularProgress size={20} color="inherit" sx={{ mr: 1 }} />
+                                <Typography variant="button" sx={{ fontWeight: 'bold' }}>Invio...</Typography>
+                            </>
+                        ) : (
+                            <>
+                                <SaveIcon sx={{ mr: 1 }} />
+                                <Typography variant="button" sx={{ fontWeight: 'bold' }}>Salva</Typography>
+                            </>
+                        )}
                     </Fab>
                 </Box>
             </Zoom>
