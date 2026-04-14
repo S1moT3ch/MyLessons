@@ -310,21 +310,43 @@ export default function SchedulePage() {
     };
 
     const handleUpdateLocalTime = () => {
-        const targetDay = localSchedules[timeData.index].giorno;
-        let updatedFull = [...localSchedules];
-        updatedFull[timeData.index].ora = timeData.new;
+        const slotIdx = timeData.index;
+        if (slotIdx === null || !localSchedules[slotIdx]) return;
 
-        const daySlots = updatedFull.filter(s => s.giorno === targetDay);
-        const recalculatedDay = applyCascade(daySlots);
+        const targetDay = localSchedules[slotIdx].giorno;
 
-        const final = [
-            ...updatedFull.filter(s => s.giorno !== targetDay),
-            ...recalculatedDay
-        ];
+        // 1. Creiamo la copia aggiornata con il NUOVO orario inserito dall'utente
+        const updatedSchedules = localSchedules.map((slot, idx) => {
+            if (idx === slotIdx) {
+                return { ...slot, ora: timeData.new };
+            }
+            return slot;
+        });
 
-        setLocalSchedules(final);
-        setHasChanges(true);
+        // 2. Separiamo gli slot del giorno e ordiniamoli
+        const daySlots = updatedSchedules
+            .filter(s => s.giorno === targetDay)
+            .sort((a, b) => a.ora.localeCompare(b.ora));
+
+        // 3. APPLICHIAMO LA CASCATA SOLO DA QUELLO MODIFICATO IN POI
+        // Troviamo la nuova posizione dello slot modificato dopo l'ordinamento
+        const newIdxInDay = daySlots.findIndex(s => s.ora === timeData.new);
+
+        const recalculatedDay = [...daySlots];
+        for (let i = newIdxInDay + 1; i < recalculatedDay.length; i++) {
+            const prev = recalculatedDay[i - 1];
+            recalculatedDay[i] = {
+                ...recalculatedDay[i],
+                ora: calculateEndTime(prev.ora, prev.durata || 60)
+            };
+        }
+
+        // 4. Ricomponiamo l'array globale
+        const otherDays = updatedSchedules.filter(s => s.giorno !== targetDay);
+        setLocalSchedules([...otherDays, ...recalculatedDay]);
+
         setOpenTimeDialog(false);
+        setEditingSlot(null);
     };
 
     const handleResetForNewWeek = async () => {
@@ -432,7 +454,17 @@ export default function SchedulePage() {
                                                         gap: isEditing ? 2 : 0
                                                     }}>
                                                         <Typography variant="body2" fontWeight="800">{slot.ora}</Typography>
-                                                        <IconButton size="small" onClick={() => { setTimeData({ old: slot.ora, new: slot.ora, index: slot.globalIdx }); setOpenTimeDialog(true); }}>
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={() => {
+                                                                setTimeData({
+                                                                    old: slot.ora,
+                                                                    new: slot.ora,
+                                                                    index: slot.globalIdx // Questo deve essere l'indice originale di localSchedules
+                                                                });
+                                                                setOpenTimeDialog(true);
+                                                            }}
+                                                        >
                                                             <AccessTimeFilledIcon sx={{ fontSize: 16 }} />
                                                         </IconButton>
                                                         {isEditing && <Typography variant="caption" fontWeight="bold" color="primary">MODIFICA PARTECIPANTI</Typography>}
@@ -466,9 +498,19 @@ export default function SchedulePage() {
                                                                         sx={{ borderRadius: 3 }}
                                                                     >
                                                                         <MenuItem value="" disabled><em>+ Aggiungi studente...</em></MenuItem>
-                                                                        {subscribers.map((sub) => (
-                                                                            <MenuItem key={sub.studentEmail} value={sub.studentEmail}>{sub.studentName}</MenuItem>
-                                                                        ))}
+
+                                                                        {/* FILTRO: Mostra solo i subscribers che NON sono già in slot.students */}
+                                                                        {[...subscribers]
+                                                                            .filter(sub =>
+                                                                                !(slot.students || []).some(s => s.email.toLowerCase() === sub.studentEmail.toLowerCase())
+                                                                            )
+                                                                            .sort((a, b) => a.studentName.localeCompare(b.studentName))
+                                                                            .map((sub) => (
+                                                                                <MenuItem key={sub.studentEmail} value={sub.studentEmail}>
+                                                                                    {sub.studentName}
+                                                                                </MenuItem>
+                                                                            ))
+                                                                        }
                                                                     </Select>
                                                                 </FormControl>
 

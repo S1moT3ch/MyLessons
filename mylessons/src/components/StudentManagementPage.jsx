@@ -145,10 +145,14 @@ export default function StudentsManagementPage() {
         return `${amount.toFixed(2)}€`;
     };
 
-    const filteredStudents = studentsData.filter(s =>
-        s.studentName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.studentEmail.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // 1. Filtriamo gli studenti in base alla ricerca
+// 2. Ordiniamo il risultato in ordine alfabetico (A-Z)
+    const filteredStudents = studentsData
+        .filter(s =>
+            s.studentName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            s.studentEmail.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+        .sort((a, b) => a.studentName.localeCompare(b.studentName));
 
     const MobileCard = ({ student }) => {
         const isVisible = visibleStudentEmail === student.studentEmail;
