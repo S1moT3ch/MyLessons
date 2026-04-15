@@ -11,6 +11,7 @@ import StudentSchedulePage from "./components/StudentSchedulePage";
 import StudentsManagementPage from "./components/StudentManagementPage";
 import FinancialDashboard from "./components/FinancialDashboard";
 import StudentBalance from "./components/StudentBalance";
+import TeacherFeedbackPage from "./components/TeacherFeedbackPage";
 
 // --- 1. HELPER SESSIONE ---
 const getSession = () => {
@@ -106,6 +107,14 @@ function App() {
                         element={
                             <RoleBasedRoute allowedRole="Insegnante">
                                 <FinancialDashboard />
+                            </RoleBasedRoute>
+                        }
+                    />
+                    <Route
+                        path="feedbacks"
+                        element={
+                            <RoleBasedRoute allowedRole="Insegnante">
+                                <TeacherFeedbackPage />
                             </RoleBasedRoute>
                         }
                     />

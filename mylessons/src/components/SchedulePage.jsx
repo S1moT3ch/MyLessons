@@ -4,7 +4,7 @@ import {
     Card, Stack, Chip, Avatar, useTheme, useMediaQuery,
     ToggleButton, ToggleButtonGroup, Button, Dialog,
     DialogTitle, DialogContent, DialogActions, FormControl,
-    Select, MenuItem, TextField, Fab, Zoom, Paper, LinearProgress
+    Select, MenuItem, TextField, Fab, Zoom, Paper, LinearProgress, Tooltip, Badge
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
@@ -15,8 +15,9 @@ import {
     Save as SaveIcon,
     Refresh as RefreshIcon,
     WarningAmber as WarningAmberIcon,
-    AddCircleOutline as AddCircleOutlineIcon
+    AddCircleOutline as AddCircleOutlineIcon,
 } from '@mui/icons-material';
+import FeedbackIcon from '@mui/icons-material/Feedback';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import {APPS_SCRIPT_URL} from "./config/config";
@@ -393,10 +394,31 @@ export default function SchedulePage() {
                     <IconButton onClick={() => navigate(-1)} size="large"><ArrowBackIcon /></IconButton>
                     <Typography variant="h5" fontWeight="800">Agenda</Typography>
                 </Stack>
-                <ToggleButtonGroup value={viewMode} exclusive onChange={(e, next) => next && setViewMode(next)} size="small">
-                    <ToggleButton value="giorno">Giorno</ToggleButton>
-                    <ToggleButton value="settimana">Settimana</ToggleButton>
-                </ToggleButtonGroup>
+                <Stack direction="row" spacing={1} alignItems="center">
+                    {/* NUOVO TASTO FEEDBACK */}
+                    <Tooltip title="Vedi risposte studenti">
+                        <IconButton
+                            onClick={() => navigate("/dashboard/feedbacks")}
+                            sx={{
+                                bgcolor: 'white',
+                                boxShadow: 1,
+                                border: '1px solid',
+                                borderColor: 'primary.light',
+                                color: 'primary.main',
+                                '&:hover': { bgcolor: 'primary.light', color: 'white' }
+                            }}
+                        >
+                            {/* Il Badge mostra un puntino se ci sono nuovi feedback (opzionale) */}
+                            <Badge variant="dot" color="error" overlap="circular">
+                                <FeedbackIcon />
+                            </Badge>
+                        </IconButton>
+                    </Tooltip>
+                    <ToggleButtonGroup value={viewMode} exclusive onChange={(e, next) => next && setViewMode(next)} size="small">
+                        <ToggleButton value="giorno">Giorno</ToggleButton>
+                        <ToggleButton value="settimana">Settimana</ToggleButton>
+                    </ToggleButtonGroup>
+                </Stack>
             </Stack>
 
             {viewMode === 'giorno' && (
