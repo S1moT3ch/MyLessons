@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     Box, Typography, CircularProgress, IconButton,
-    Card, Stack, Paper, Divider, useMediaQuery, useTheme,
+    Card, Stack, Paper, useMediaQuery, useTheme,
     ToggleButton, ToggleButtonGroup, Tab, Tabs
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
-    CheckCircle as ConfirmIcon,
     CalendarMonth as CalendarIcon,
-    Cancel as CancelIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
