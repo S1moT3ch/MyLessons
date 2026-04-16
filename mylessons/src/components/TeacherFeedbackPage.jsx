@@ -21,6 +21,7 @@ export default function TeacherFeedbackPage() {
 
     const [loading, setLoading] = useState(true);
     const [feedbackList, setFeedbackList] = useState([]);
+    const [fullSchedule, setFullSchedule] = useState([]);
 
     // Filtri: 'today', 'specific', 'all'
     const [viewFilter, setViewFilter] = useState('today');
@@ -36,75 +37,146 @@ export default function TeacherFeedbackPage() {
 
         setLoading(true);
         try {
-            const res = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`);
-            const result = await res.json();
-            if (result.status === "success") {
-                setFeedbackList(result.data);
-            }
+            // 1. Recuperiamo i feedback (le risposte)
+            const resFb = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`);
+            const resultFb = await resFb.json();
+
+            // 2. Recuperiamo l'orario completo del docente (azione che già usi nella SchedulePage)
+            const resSched = await fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`);
+            const resultSched = await resSched.json();
+
+            if (resultFb.status === "success") setFeedbackList(resultFb.data);
+            if (resultSched.status === "success") setFullSchedule(resultSched.data);
+
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
     }, [navigate]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
-    const renderFeedbackCard = (item, idx) => (
-        <Card key={idx} elevation={0} sx={{
-            borderRadius: 4, border: '1px solid',
-            borderColor: item.status === "Assente" ? '#ffcdd2' : '#e0e0e0',
-            bgcolor: 'white'
-        }}>
-            <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography sx={{ minWidth: 55, fontWeight: '900', color: 'text.secondary' }}>
-                    {item.ora.slice(0, 2)}:{item.ora.slice(2)}
-                </Typography>
-                <Divider orientation="vertical" flexItem />
-                <Box sx={{ flexGrow: 1 }}>
-                    <Typography variant="body1" fontWeight="800">{item.studentName}</Typography>
+    // Sostituisci la funzione renderFeedbackCard con questa versione ottimizzata
+    const renderFeedbackCard = (item, idx) => {
+        const occupante = getOccupantAt(item.preferenza);
+        const isAssente = item.status === "Assente";
 
-                    <Stack direction="row" alignItems="center" spacing={0.5}>
-                        {item.status === "Confermata" ?
-                            <ConfirmIcon sx={{ fontSize: 16, color: '#4caf50' }} /> :
-                            <CancelIcon sx={{ fontSize: 16, color: '#f44336' }} />
-                        }
-                        <Typography variant="caption" fontWeight="bold" color={item.status === "Assente" ? "error.main" : "success.main"}>
-                            {item.status === "Assente" ? "NON DISPONIBILE" : "CONFERMATO"}
+        return (
+            <Card key={idx} elevation={0} sx={{
+                borderRadius: 4,
+                border: '1px solid',
+                borderColor: isAssente ? '#ffebee' : '#f0f0f0',
+                bgcolor: 'white',
+                mb: 2,
+                overflow: 'hidden',
+                boxShadow: isAssente ? '0 4px 12px rgba(244, 67, 54, 0.05)' : 'none'
+            }}>
+                {/* Indicatore colorato laterale */}
+                <Box sx={{ display: 'flex' }}>
+                    <Box sx={{ width: 6, bgcolor: isAssente ? '#f44336' : '#4caf50' }} />
+
+                    <Box sx={{ p: 2, flexGrow: 1 }}>
+                        {/* Header Card: Orario e Stato */}
+                        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
+                            <Box>
+                                <Typography variant="h6" fontWeight="900" sx={{ lineHeight: 1, color: '#2c3e50' }}>
+                                    {item.ora.slice(0, 2)}:{item.ora.slice(2)}
+                                </Typography>
+                                <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ textTransform: 'uppercase' }}>
+                                    {viewFilter === 'all' ? item.giorno : 'Slot Orario'}
+                                </Typography>
+                            </Box>
+
+                            <Box sx={{
+                                px: 1.5, py: 0.5, borderRadius: 2,
+                                bgcolor: isAssente ? '#fff5f5' : '#e8f5e9',
+                                border: '1px solid',
+                                borderColor: isAssente ? '#feb2b2' : '#c6f6d5'
+                            }}>
+                                <Typography variant="caption" fontWeight="900" color={isAssente ? "#c53030" : "#22543d"}>
+                                    {isAssente ? "NON DISPONIBILE" : "CONFERMATO"}
+                                </Typography>
+                            </Box>
+                        </Stack>
+
+                        <Typography variant="body1" fontWeight="800" sx={{ mb: 1.5, fontSize: '1.1rem' }}>
+                            {item.studentName}
                         </Typography>
-                    </Stack>
 
-                    {/* --- NUOVA SEZIONE PROPOSTA ALTERNATIVA --- */}
-                    {item.status === "Assente" && item.preferenza && (
-                        <Box sx={{
-                            mt: 1, p: 1,
-                            bgcolor: 'primary.light',
-                            color: 'primary.contrastText',
-                            borderRadius: 2,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1
-                        }}>
-                            <CalendarIcon sx={{ fontSize: 16 }} />
-                            <Typography variant="caption" fontWeight="900">
-                                PROPONE: {item.preferenza.toUpperCase()}
-                            </Typography>
-                        </Box>
-                    )}
+                        {/* Sezione Proposta Studente (Mobile Optimized) */}
+                        {isAssente && item.preferenza && (
+                            <Paper elevation={0} sx={{
+                                p: 1.5, mb: 1.5, borderRadius: 3,
+                                bgcolor: '#f8faff', border: '1px solid #e0e7ff'
+                            }}>
+                                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                                    <CalendarIcon sx={{ fontSize: 18, color: '#3f51b5' }} />
+                                    <Typography variant="caption" fontWeight="900" color="#3f51b5">
+                                        PROPOSTA ALTERNATIVA
+                                    </Typography>
+                                </Stack>
 
-                    {item.note && (
-                        <Typography variant="body2" sx={{
-                            mt: 1, p: 1,
-                            bgcolor: '#f5f5f5',
-                            borderRadius: 2,
-                            fontSize: '0.85rem',
-                            fontStyle: 'italic',
-                            borderLeft: '4px solid #ddd'
-                        }}>
-                            "{item.note}"
-                        </Typography>
-                    )}
+                                <Typography variant="body2" fontWeight="800" sx={{ mb: 0.5 }}>
+                                    {item.preferenza.toUpperCase()}
+                                </Typography>
+
+                                <Box sx={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 0.5,
+                                    px: 1, py: 0.3, borderRadius: 1.5,
+                                    bgcolor: occupante ? '#fffaf0' : '#f0fff4',
+                                    color: occupante ? '#9c4221' : '#276749',
+                                    border: '1px solid',
+                                    borderColor: occupante ? '#feebc8' : '#c6f6d5'
+                                }}>
+                                    <Typography sx={{ fontSize: '0.65rem', fontWeight: 'bold' }}>
+                                        {occupante ? `⚠️ OCCUPATO DA: ${occupante}` : "✅ SLOT LIBERO"}
+                                    </Typography>
+                                </Box>
+                            </Paper>
+                        )}
+
+                        {/* Note dello studente */}
+                        {item.note && (
+                            <Box sx={{
+                                p: 1.5, bgcolor: '#f1f3f5', borderRadius: '12px 12px 12px 4px',
+                                position: 'relative'
+                            }}>
+                                <Typography variant="body2" sx={{
+                                    color: '#495057', fontSize: '0.85rem', fontStyle: 'italic',
+                                    lineHeight: 1.4
+                                }}>
+                                    "{item.note}"
+                                </Typography>
+                            </Box>
+                        )}
+                    </Box>
                 </Box>
-            </Box>
-        </Card>
-    );
+            </Card>
+        );
+    };
+
+    const getOccupantAt = (preferenzaString) => {
+        if (!preferenzaString || !fullSchedule.length) return null;
+
+        // 1. Pulizia della stringa (es: "Lunedì 15.30" o "Lunedì 15:30")
+        // Usiamo una regex per separare il giorno dall'ora
+        const match = preferenzaString.match(/^([a-zA-Zàèìòù]+)\s+(\d{2})[:.](\d{2})$/i);
+
+        if (!match) return null;
+
+        const giornoPref = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+        const oraFormattata = `${match[2]}:${match[3]}`; // La portiamo a formato "HH:mm"
+
+        // 2. Cerchiamo nello schedule se esiste quello slot ed è occupato
+        const slotTrovato = fullSchedule.find(s =>
+            s.giorno === giornoPref && s.ora === oraFormattata
+        );
+
+        // 3. Restituiamo i nomi degli studenti se presenti
+        if (slotTrovato && slotTrovato.students && slotTrovato.students.length > 0) {
+            return slotTrovato.students.map(st => st.nome).join(", ");
+        }
+
+        return null;
+    };
 
     const renderContent = () => {
         if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>;
