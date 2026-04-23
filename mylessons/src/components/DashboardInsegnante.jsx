@@ -19,7 +19,6 @@ import {
 } from '@mui/icons-material';
 import { APPS_SCRIPT_URL } from "./config/config";
 
-// Animazione per la barra delle notifiche
 const pulseStyles = {
     '@keyframes pulse-bg': {
         '0%': { boxShadow: '0 0 0 0px rgba(245, 101, 101, 0.2)' },
@@ -31,69 +30,89 @@ const pulseStyles = {
 export default function DashboardInsegnante() {
     const navigate = useNavigate();
 
-    // 1. Definiamo gli stati SEMPRE all'inizio
     const [userData] = useState(() => {
         const session = Cookies.get('user_session');
         return session ? JSON.parse(session) : null;
     });
 
-    const [subscribers, setSubscribers] = useState([]);
-    const [pendingAbsences, setPendingAbsences] = useState([]);
-    const [loading, setLoading] = useState(true);
+    // --- RECUPERO DATI DALLA CACHE LOCALE ---
+    const [subscribers, setSubscribers] = useState(() => {
+        const saved = localStorage.getItem('cache_subscribers');
+        return saved ? JSON.parse(saved) : [];
+    });
 
-    // 2. Definiamo gli Hook SEMPRE prima di qualsiasi "if (loading)" o "if (!user)"
+    const [pendingAbsences, setPendingAbsences] = useState(() => {
+        const saved = localStorage.getItem('cache_absences');
+        return saved ? JSON.parse(saved) : [];
+    });
+
+    // Se abbiamo già dati in cache, partiamo con loading = false per mostrarli subito
+    const [loading, setLoading] = useState(subscribers.length === 0);
+
     const handleLogout = useCallback(() => {
         googleLogout();
         Cookies.remove('user_session');
+        // --- PULIZIA CACHE AL LOGOUT ---
+        localStorage.removeItem('cache_subscribers');
+        localStorage.removeItem('cache_absences');
+        localStorage.removeItem('cache_schedules');
         navigate('/login', { replace: true });
     }, [navigate]);
 
-    const fetchDashboardData = useCallback(async () => {
-        // Controllo interno alla funzione invece di return anticipato nel componente
+    const fetchDashboardData = useCallback(async (isSilent = false) => {
         if (!userData?.id_token) return;
 
-        setLoading(true);
+        if (!isSilent) setLoading(true);
+
         try {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
 
-            // Fetch Feedback (per le assenze)
-            const resFb = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`);
-            const resultFb = await resFb.json();
+            // Avviamo le TRE chiamate in parallelo: Feedback, Iscritti e ora anche l'Agenda (Schedule)
+            const [resFb, resSubs, resSched] = await Promise.all([
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`)
+            ]);
 
-            // Fetch Iscritti
-            const urlSubs = `${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`;
-            const resSubs = await fetch(urlSubs);
+            const resultFb = await resFb.json();
             const resultSubs = await resSubs.json();
+            const resultSched = await resSched.json();
 
             if (resultFb.status === "success") {
                 const absences = resultFb.data.filter(f => f.status === "Assente");
                 setPendingAbsences(absences);
+                localStorage.setItem('cache_absences', JSON.stringify(absences));
             }
 
             if (resultSubs.status === "success") {
                 setSubscribers(resultSubs.data);
-            } else if (resultSubs.message?.includes("autorizzato")) {
-                handleLogout();
+                localStorage.setItem('cache_subscribers', JSON.stringify(resultSubs.data));
             }
+
+            // --- NUOVO: Salvataggio Agenda nella cache dalla Dashboard ---
+            if (resultSched.status === "success") {
+                localStorage.setItem('cache_schedules', JSON.stringify(resultSched.data));
+            }
+
         } catch (error) {
-            console.error("Errore dashboard:", error);
+            console.error("Errore recupero dati dashboard:", error);
         } finally {
             setLoading(false);
         }
-    }, [userData, handleLogout]);
+    }, [userData]);
 
     useEffect(() => {
         if (!userData) {
             navigate('/login');
         } else {
-            fetchDashboardData();
+            // Caricamento silenzioso se abbiamo già dati, altrimenti normale
+            const hasCache = subscribers.length > 0;
+            fetchDashboardData(hasCache);
         }
-    }, [userData, navigate, fetchDashboardData]);
+    }, [userData, navigate, fetchDashboardData, subscribers.length]);
 
-    // 3. I return condizionali per la UI vanno solo QUI, dopo gli Hook
     if (!userData) return null;
 
-    // Componente Bottone Ottimizzato
     const MenuButton = ({ title, icon, color, onClick, subtitle }) => (
         <Paper
             component={Button}
@@ -121,7 +140,6 @@ export default function DashboardInsegnante() {
     return (
         <Box sx={{ p: 2, maxWidth: 500, mx: 'auto', bgcolor: '#fdfdfd', minHeight: '100vh', pb: 6, ...pulseStyles }}>
 
-            {/* Top Bar */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 4, pt: 1 }}>
                 <Stack direction="row" spacing={1.5} alignItems="center">
                     <Badge overlap="circular" anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} variant="dot" color="success">
@@ -144,7 +162,6 @@ export default function DashboardInsegnante() {
                 </Stack>
             </Stack>
 
-            {/* Notification Bar per le Assenze */}
             {pendingAbsences.length > 0 && (
                 <Fade in={true}>
                     <Paper
@@ -172,7 +189,6 @@ export default function DashboardInsegnante() {
                 </Fade>
             )}
 
-            {/* Grid delle Azioni */}
             <Grid container spacing={2} sx={{ mb: 4 }}>
                 <Grid item xs={6}>
                     <MenuButton title="Agenda" subtitle="Pianifica lezioni" icon={<CalendarMonthIcon />} color="secondary" onClick={() => navigate('/dashboard/schedule')} />
@@ -194,7 +210,6 @@ export default function DashboardInsegnante() {
                 </Grid>
             </Grid>
 
-            {/* Sezione Recenti */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2, px: 0.5 }}>
                 <Typography variant="subtitle1" fontWeight="900">Ultimi Iscritti</Typography>
                 <Button
@@ -207,7 +222,7 @@ export default function DashboardInsegnante() {
             </Stack>
 
             <Card elevation={0} sx={{ borderRadius: 5, border: '1px solid #f0f0f0', bgcolor: 'white', overflow: 'hidden' }}>
-                {loading ? (
+                {loading && subscribers.length === 0 ? (
                     <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
                 ) : subscribers.length > 0 ? (
                     <List disablePadding>
@@ -261,7 +276,6 @@ export default function DashboardInsegnante() {
                 )}
             </Card>
 
-            {/* Footer Informativo */}
             <Box sx={{ mt: 4, textAlign: 'center', opacity: 0.5 }}>
                 <Typography variant="caption" fontWeight="600">
                     MyLessons v1.0 • Sincronizzazione Attiva

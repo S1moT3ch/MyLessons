@@ -67,14 +67,17 @@ export default function SchedulePage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
-    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [hasChanges, setHasChanges] = useState(false);
     const [pendingChanges, setPendingChanges] = useState(false);
     const [hadChangesBeforeEditing, setHadChangesBeforeEditing] = useState(false);
 
-    const [localSchedules, setLocalSchedules] = useState([]);
+    const [localSchedules, setLocalSchedules] = useState(() => {
+        const saved = localStorage.getItem('cache_schedules');
+        return saved ? JSON.parse(saved) : [];
+    });
     const [subscribers, setSubscribers] = useState([]);
+    const [loading, setLoading] = useState(localSchedules.length === 0);
 
     const [viewMode, setViewMode] = useState('giorno');
     const [filterDay, setFilterDay] = useState(
@@ -101,7 +104,6 @@ export default function SchedulePage() {
         if (!session?.id_token) return navigate('/login');
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
-        // Mostriamo la rotellina solo se NON è un caricamento silenzioso
         if (!isSilent) setLoading(true);
 
         try {
@@ -113,10 +115,19 @@ export default function SchedulePage() {
             const dataSched = await resSched.json();
             const dataSubs = await resSubs.json();
 
-            if (dataSched.status === "success") setLocalSchedules(dataSched.data);
-            if (dataSubs.status === "success") setSubscribers(dataSubs.data);
+            if (dataSched.status === "success") {
+                setLocalSchedules(dataSched.data);
+                // --- AGGIUNGI QUESTA RIGA ---
+                localStorage.setItem('cache_schedules', JSON.stringify(dataSched.data));
+                // ----------------------------
+            }
 
-            // Importante: resettiamo hasChanges solo se il salvataggio è andato a buon fine
+            if (dataSubs.status === "success") {
+                setSubscribers(dataSubs.data);
+                // Opzionale: puoi salvare anche questi se vuoi la lista studenti istantanea in modifica
+                localStorage.setItem('cache_subscribers', JSON.stringify(dataSubs.data));
+            }
+
             setHasChanges(false);
         } catch (error) {
             console.error("Errore recupero dati:", error);
@@ -125,7 +136,11 @@ export default function SchedulePage() {
         }
     }, [getAuthData, navigate]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        // Se abbiamo già dati in cache, facciamo un caricamento "silenzioso" (senza rotellina)
+        const hasCache = localSchedules.length > 0;
+        fetchData(hasCache);
+    }, [fetchData, localSchedules.length]);
     
     useEffect(() => {
         const handleVisibilityChange = () => {
@@ -233,25 +248,6 @@ export default function SchedulePage() {
         setLocalSchedules(finalSchedules);
         setHasChanges(true);
 
-        if (isOccupied) {
-            const session = getAuthData();
-            if (!session?.id_token) {
-                navigate('/login');
-                return;
-            }
-            try {
-                await fetch(APPS_SCRIPT_URL, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    body: JSON.stringify({
-                        action: "removeSlotAndDecrement",
-                        id_token: session.id_token,
-                        studentEmail: slotToRemove.email,
-                        teacherName: `${session.given_name} ${session.family_name}`
-                    })
-                });
-            } catch (e) { console.error(e); }
-        }
     };
 
     const handleUpdateLocalSlot = (studentEmail, globalIdx, action = "add", studentIdx = null) => {

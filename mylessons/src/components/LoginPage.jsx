@@ -17,7 +17,6 @@ function LoginPage() {
     const navigate = useNavigate();
     const location = useLocation();
 
-    // --- LOGICA ORIGINALE PRESERVATA ---
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(false);
     const [showSecretField, setShowSecretField] = useState(false);
@@ -35,12 +34,52 @@ function LoginPage() {
         }
     }, []);
 
+    // --- NUOVA LOGICA DI PREFETCHING ---
+    const prefetchDashboardData = async (userData, token) => {
+        // Il prefetch ha senso solo per gli insegnanti
+        if (userData.role !== "Insegnante") return;
+
+        try {
+            const teacherFullName = `${userData.given_name} ${userData.family_name}`;
+
+            // Avviamo le richieste in parallelo per non perdere tempo
+            const [resFb, resSubs] = await Promise.all([
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${token}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${token}`)
+            ]);
+
+            const dataFb = await resFb.json();
+            const dataSubs = await resSubs.json();
+
+            if (dataFb.status === "success") {
+                const absences = dataFb.data.filter(f => f.status === "Assente");
+                localStorage.setItem('cache_absences', JSON.stringify(absences));
+            }
+
+            if (dataSubs.status === "success") {
+                localStorage.setItem('cache_subscribers', JSON.stringify(dataSubs.data));
+            }
+            console.log("Prefetch completato con successo");
+        } catch (e) {
+            console.error("Prefetch fallito:", e);
+        }
+    };
+
     const completeLogin = async (userData, token, selectedRole) => {
+        setLoading(true); // Attiviamo il loading visivo durante il prefetch
         const sessionData = { ...userData, id_token: token, role: selectedRole };
+
         Cookies.set('user_session', JSON.stringify(sessionData), {
             expires: 1/24, secure: true, sameSite: 'strict'
         });
+
         setUser(sessionData);
+
+        // Se è un insegnante, scarichiamo i dati PRIMA di cambiare pagina
+        if (selectedRole === "Insegnante") {
+            await prefetchDashboardData(sessionData, token);
+        }
+
         try {
             await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
@@ -74,6 +113,7 @@ function LoginPage() {
             }
         } catch (error) {
             setLoading(false);
+            setErrorMsg("Errore di connessione.");
         }
     };
 
@@ -101,6 +141,8 @@ function LoginPage() {
     const handleLogout = () => {
         googleLogout();
         Cookies.remove('user_session');
+        localStorage.removeItem('cache_subscribers');
+        localStorage.removeItem('cache_absences');
         setUser(null);
         setShowSecretField(false);
         setInputCode('');
@@ -137,7 +179,6 @@ function LoginPage() {
             <Container maxWidth="xs">
                 <Grow in timeout={800}>
                     <Box sx={{ py: 4 }}>
-                        {/* Logo / Brand Header */}
                         <Box sx={{ textAlign: 'center', mb: 4 }}>
                             <Avatar sx={{
                                 bgcolor: 'rgba(255,255,255,0.2)',
@@ -164,7 +205,7 @@ function LoginPage() {
                                 <Fade in>
                                     <Box sx={{ py: 4 }}>
                                         <CircularProgress size={50} thickness={5} sx={{ color: '#1976d2' }} />
-                                        <Typography sx={{ mt: 3, fontWeight: 600, color: 'text.secondary' }}>Verifica account...</Typography>
+                                        <Typography sx={{ mt: 3, fontWeight: 600, color: 'text.secondary' }}>Sincronizzazione dati...</Typography>
                                     </Box>
                                 </Fade>
                             ) : user && !showSecretField ? (
@@ -178,7 +219,7 @@ function LoginPage() {
                                             fullWidth
                                             size="large"
                                             endIcon={<ArrowForwardIcon />}
-                                            onClick={() => navigate('/dashboard')}
+                                            onClick={() => completeLogin(user, user.id_token, user.role)}
                                             sx={{ borderRadius: 3, py: 1.8, fontWeight: 700, textTransform: 'none', boxShadow: '0 10px 20px rgba(25, 118, 210, 0.3)' }}
                                         >
                                             Entra nel portale
