@@ -27,8 +27,15 @@ export default function StudentsManagementPage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-    const [loading, setLoading] = useState(true);
-    const [studentsData, setStudentsData] = useState([]);
+    // --- LOGICA DI CACHE ---
+    // Inizializziamo con i dati pre-caricati dalla Dashboard/Login
+    const [studentsData, setStudentsData] = useState(() => {
+        const saved = localStorage.getItem('cache_subscribers');
+        return saved ? JSON.parse(saved) : [];
+    });
+
+    // Se abbiamo dati in cache, non mostriamo lo spinner all'inizio
+    const [loading, setLoading] = useState(studentsData.length === 0);
     const [searchTerm, setSearchTerm] = useState('');
 
     const [visibleStudentEmail, setVisibleStudentEmail] = useState(null);
@@ -36,31 +43,38 @@ export default function StudentsManagementPage() {
     const [rateDialog, setRateDialog] = useState({ open: false, student: null, rate: 0 });
     const [isSaving, setIsSaving] = useState(false);
 
-    // Gestione Menu contestuale via Coordinate (per evitare errore alto-sinistra)
     const [menuPosition, setMenuPosition] = useState(null);
     const [selectedStudent, setSelectedStudent] = useState(null);
     const openMenu = Boolean(menuPosition);
 
     const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (isSilent = false) => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return navigate('/login');
         const session = JSON.parse(sessionStr);
 
-        setLoading(true);
+        if (!isSilent) setLoading(true);
         try {
             const response = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
             const result = await response.json();
-            if (result.status === "success") setStudentsData(result.data);
+            if (result.status === "success") {
+                setStudentsData(result.data);
+                // Aggiorniamo la cache con i dati freschi
+                localStorage.setItem('cache_subscribers', JSON.stringify(result.data));
+            }
         } catch (error) {
             console.error(error);
         } finally { setLoading(false); }
     }, [navigate]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        // Caricamento silenzioso se abbiamo già la cache
+        const hasCache = studentsData.length > 0;
+        fetchData(hasCache);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fetchData]);
 
-    // Funzione apertura menu con cattura coordinate
     const handleOpenMenu = (event, student) => {
         event.stopPropagation();
         setMenuPosition({
@@ -100,7 +114,11 @@ export default function StudentsManagementPage() {
                 })
             });
             if ((await response.text()).includes("Success")) {
-                setStudentsData(prev => prev.map(s => s.studentEmail === payDialog.student.studentEmail ? { ...s, lezioniDaPagare: newDebtValue } : s));
+                const updatedData = studentsData.map(s => s.studentEmail === payDialog.student.studentEmail ? { ...s, lezioniDaPagare: newDebtValue } : s);
+                setStudentsData(updatedData);
+                // Aggiorniamo la cache locale subito dopo la modifica
+                localStorage.setItem('cache_subscribers', JSON.stringify(updatedData));
+
                 setPayDialog({ open: false, student: null, amountPaid: 1 });
                 setSnackbar({ open: true, message: 'Pagamento registrato!', severity: 'success' });
             }
@@ -131,7 +149,11 @@ export default function StudentsManagementPage() {
                 })
             });
             if ((await response.text()).includes("Success")) {
-                setStudentsData(prev => prev.map(s => s.studentEmail === rateDialog.student.studentEmail ? { ...s, tariffa: rateDialog.rate } : s));
+                const updatedData = studentsData.map(s => s.studentEmail === rateDialog.student.studentEmail ? { ...s, tariffa: rateDialog.rate } : s);
+                setStudentsData(updatedData);
+                // Aggiorniamo la cache locale
+                localStorage.setItem('cache_subscribers', JSON.stringify(updatedData));
+
                 setRateDialog({ open: false, student: null, rate: 0 });
                 setSnackbar({ open: true, message: 'Tariffa aggiornata!', severity: 'success' });
             }
@@ -145,8 +167,6 @@ export default function StudentsManagementPage() {
         return `${amount.toFixed(2)}€`;
     };
 
-    // 1. Filtriamo gli studenti in base alla ricerca
-// 2. Ordiniamo il risultato in ordine alfabetico (A-Z)
     const filteredStudents = studentsData
         .filter(s =>
             s.studentName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -225,63 +245,66 @@ export default function StudentsManagementPage() {
                 placeholder="Cerca..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                sx={{ mb: 3, bgcolor: 'white' }}
+                sx={{ mb: 3, bgcolor: 'white', '& .MuiOutlinedInput-root': { borderRadius: 4 } }}
                 InputProps={{
                     startAdornment: (<InputAdornment position="start"><SearchIcon fontSize="small" color="action" /></InputAdornment>),
-                    style: { borderRadius: 16, height: 45 }
+                    style: { height: 45 }
                 }}
             />
 
-            {loading ? (
+            {loading && studentsData.length === 0 ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress size={30} /></Box>
-            ) : isMobile ? (
-                <Box>{filteredStudents.map((s, i) => <MobileCard key={i} student={s} />)}</Box>
             ) : (
-                <TableContainer component={Paper} sx={{ borderRadius: 4, border: '1px solid #eee', boxShadow: 'none' }}>
-                    <Table size="small">
-                        <TableHead sx={{ bgcolor: '#fafafa' }}>
-                            <TableRow>
-                                <TableCell sx={{ fontWeight: '800' }}>Studente</TableCell>
-                                <TableCell align="center" sx={{ fontWeight: '800' }}>In Agenda</TableCell>
-                                <TableCell align="center" sx={{ fontWeight: '800' }}>Svolte (Tot)</TableCell>
-                                <TableCell align="center" sx={{ fontWeight: '800' }}>Da Pagare</TableCell>
-                                <TableCell align="center" sx={{ fontWeight: '800' }}>Debito (€)</TableCell>
-                                <TableCell align="right" sx={{ fontWeight: '800' }}>Azioni</TableCell>
-                            </TableRow>
-                        </TableHead>
-                        <TableBody>
-                            {filteredStudents.map((student, index) => {
-                                const isSettled = student.lezioniDaPagare === 0;
-                                return (
-                                    <TableRow key={index} hover>
-                                        <TableCell>
-                                            <Typography variant="body2" fontWeight="700">{student.studentName}</Typography>
-                                            <Typography variant="caption" color="text.secondary">{student.studentEmail}</Typography>
-                                        </TableCell>
-                                        <TableCell align="center"><Chip label={student.lessonCount} size="small" variant="outlined" /></TableCell>
-                                        <TableCell align="center">{student.lezioniSvolte}</TableCell>
-                                        <TableCell align="center"><Chip label={student.lezioniDaPagare} size="small" color={isSettled ? "success" : "error"} /></TableCell>
-                                        <TableCell
-                                            align="center"
-                                            sx={{ fontWeight: 'bold', cursor: 'pointer', color: isSettled ? "success.main" : "error.main" }}
-                                            onClick={() => setVisibleStudentEmail(visibleStudentEmail === student.studentEmail ? null : student.studentEmail)}
-                                        >
-                                            {formatCurrency(student.studentEmail, student.lezioniDaPagare * (student.tariffa || 0))}
-                                        </TableCell>
-                                        <TableCell align="right">
-                                            <IconButton size="small" onClick={(e) => handleOpenMenu(e, student)}>
-                                                <SettingsIcon fontSize="inherit" />
-                                            </IconButton>
-                                        </TableCell>
+                <Box>
+                    {isMobile ? (
+                        <Box>{filteredStudents.map((s, i) => <MobileCard key={i} student={s} />)}</Box>
+                    ) : (
+                        <TableContainer component={Paper} sx={{ borderRadius: 4, border: '1px solid #eee', boxShadow: 'none' }}>
+                            <Table size="small">
+                                <TableHead sx={{ bgcolor: '#fafafa' }}>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: '800' }}>Studente</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: '800' }}>In Agenda</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: '800' }}>Svolte (Tot)</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: '800' }}>Da Pagare</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: '800' }}>Debito (€)</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: '800' }}>Azioni</TableCell>
                                     </TableRow>
-                                );
-                            })}
-                        </TableBody>
-                    </Table>
-                </TableContainer>
+                                </TableHead>
+                                <TableBody>
+                                    {filteredStudents.map((student, index) => {
+                                        const isSettled = student.lezioniDaPagare === 0;
+                                        return (
+                                            <TableRow key={index} hover>
+                                                <TableCell>
+                                                    <Typography variant="body2" fontWeight="700">{student.studentName}</Typography>
+                                                    <Typography variant="caption" color="text.secondary">{student.studentEmail}</Typography>
+                                                </TableCell>
+                                                <TableCell align="center"><Chip label={student.lessonCount} size="small" variant="outlined" /></TableCell>
+                                                <TableCell align="center">{student.lezioniSvolte}</TableCell>
+                                                <TableCell align="center"><Chip label={student.lezioniDaPagare} size="small" color={isSettled ? "success" : "error"} /></TableCell>
+                                                <TableCell
+                                                    align="center"
+                                                    sx={{ fontWeight: 'bold', cursor: 'pointer', color: isSettled ? "success.main" : "error.main" }}
+                                                    onClick={() => setVisibleStudentEmail(visibleStudentEmail === student.studentEmail ? null : student.studentEmail)}
+                                                >
+                                                    {formatCurrency(student.studentEmail, student.lezioniDaPagare * (student.tariffa || 0))}
+                                                </TableCell>
+                                                <TableCell align="right">
+                                                    <IconButton size="small" onClick={(e) => handleOpenMenu(e, student)}>
+                                                        <SettingsIcon fontSize="inherit" />
+                                                    </IconButton>
+                                                </TableCell>
+                                            </TableRow>
+                                        );
+                                    })}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    )}
+                </Box>
             )}
 
-            {/* MENU ANCORATO ALLE COORDINATE DEL CLICK */}
             <Menu
                 open={openMenu}
                 onClose={handleCloseMenu}

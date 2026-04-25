@@ -137,10 +137,21 @@ export default function SchedulePage() {
     }, [getAuthData, navigate]);
 
     useEffect(() => {
-        // Se abbiamo già dati in cache, facciamo un caricamento "silenzioso" (senza rotellina)
-        const hasCache = localSchedules.length > 0;
+        // 1. Se ci sono cambiamenti non salvati, blocchiamo il caricamento dal server
+        if (hasChanges) return;
+
+        // 2. Definiamo fetchData come dipendenza stabile (lo è già grazie a useCallback)
+        // Usiamo una variabile locale per la cache leggendo lo stato aggiornato
+        const hasCache = localSchedules && localSchedules.length > 0;
+
         fetchData(hasCache);
-    }, [fetchData, localSchedules.length]);
+
+        // ESLint si lamenta perché localSchedules.length non è qui sotto.
+        // Ma noi NON vogliamo che l'effetto scatti ogni volta che la lunghezza cambia,
+        // altrimenti quando aggiungi uno slot (lunghezza aumenta) lui ricaricherebbe tutto.
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fetchData, hasChanges]);
     
     useEffect(() => {
         const handleVisibilityChange = () => {

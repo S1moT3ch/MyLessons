@@ -21,26 +21,49 @@ import { APPS_SCRIPT_URL } from "./config/config";
 export default function FinancialDashboard() {
     const navigate = useNavigate();
 
-    const [loading, setLoading] = useState(true);
-    const [studentsData, setStudentsData] = useState([]);
+    // --- LOGICA DI CACHE: Recupero immediato ---
+    const [studentsData, setStudentsData] = useState(() => {
+        const saved = localStorage.getItem('cache_subscribers');
+        return saved ? JSON.parse(saved) : [];
+    });
+
+    // Se abbiamo dati in cache, non mostriamo lo spinner (loading = false)
+    const [loading, setLoading] = useState(studentsData.length === 0);
+
     const [showGlobalPrivacy, setShowGlobalPrivacy] = useState(false);
     const [visibleStudentEmail, setVisibleStudentEmail] = useState(null);
 
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (isSilent = false) => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return navigate('/login');
         const session = JSON.parse(sessionStr);
 
-        setLoading(true);
+        // Se è "silent", non attiviamo lo spinner principale
+        if (!isSilent) setLoading(true);
+
         try {
             const response = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
             const result = await response.json();
-            if (result.status === "success") setStudentsData(result.data);
-        } catch (error) { console.error(error); }
-        finally { setLoading(false); }
+
+            if (result.status === "success") {
+                setStudentsData(result.data);
+                // Aggiorniamo la cache globale usata anche da Anagrafica Studenti
+                localStorage.setItem('cache_subscribers', JSON.stringify(result.data));
+            }
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setLoading(false);
+        }
     }, [navigate]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        // Se abbiamo già dati (dalla dashboard o login), carichiamo in background
+        const hasCache = studentsData && studentsData.length > 0;
+        fetchData(hasCache);
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fetchData]);
 
     const stats = useMemo(() => {
         return studentsData.reduce((acc, s) => {
@@ -64,24 +87,17 @@ export default function FinancialDashboard() {
         return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' }).format(amount);
     };
 
-    if (loading) return (
+    if (loading && studentsData.length === 0) return (
         <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh', gap: 2 }}>
             <CircularProgress size={40} thickness={4} />
-            <Typography variant="caption" color="text.secondary" fontWeight="700">CARICAMENTO BILANCIO...</Typography>
+            <Typography variant="caption" color="text.secondary" fontWeight="700">CALCOLO BILANCIO...</Typography>
         </Box>
     );
 
     return (
-        <Box sx={{
-            p: 2,
-            maxWidth: 500,
-            mx: 'auto',
-            bgcolor: '#fdfdfd',
-            minHeight: '100vh',
-            pb: 10
-        }}>
+        <Box sx={{ p: 2, maxWidth: 500, mx: 'auto', bgcolor: '#fdfdfd', minHeight: '100vh', pb: 10 }}>
 
-            {/* Header Moderno */}
+            {/* Header */}
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3, pt: 1 }}>
                 <IconButton
                     onClick={() => navigate(-1)}
@@ -98,18 +114,12 @@ export default function FinancialDashboard() {
                 </IconButton>
             </Stack>
 
-            {/* Wallet Card - Totale Incassato */}
+            {/* Wallet Card */}
             <Paper
                 elevation={0}
                 sx={{
-                    p: 3,
-                    borderRadius: 6,
-                    bgcolor: 'primary.main',
-                    color: 'white',
-                    mb: 3,
-                    boxShadow: '0 10px 25px rgba(25, 118, 210, 0.25)',
-                    position: 'relative',
-                    overflow: 'hidden'
+                    p: 3, borderRadius: 6, bgcolor: 'primary.main', color: 'white', mb: 3,
+                    boxShadow: '0 10px 25px rgba(25, 118, 210, 0.25)', position: 'relative', overflow: 'hidden'
                 }}
             >
                 <BankIcon sx={{ position: 'absolute', right: -10, top: -10, fontSize: 120, opacity: 0.1 }} />
@@ -121,11 +131,11 @@ export default function FinancialDashboard() {
                 </Typography>
                 <Stack direction="row" spacing={1} alignItems="center">
                     <TrendingUpIcon sx={{ fontSize: 18 }} />
-                    <Typography variant="caption" fontWeight="600">Performance ottimale questo mese</Typography>
+                    <Typography variant="caption" fontWeight="600">Performance aggiornata</Typography>
                 </Stack>
             </Paper>
 
-            {/* Grid Stats Secondarie */}
+            {/* Grid Stats */}
             <Grid container spacing={2} sx={{ mb: 4 }}>
                 <Grid item xs={6}>
                     <StatBox title="In Attesa" value={stats.pending} icon={<WalletIcon />} color="error" />
@@ -154,12 +164,8 @@ export default function FinancialDashboard() {
                                 elevation={0}
                                 onClick={() => setVisibleStudentEmail(isVisible ? null : student.studentEmail)}
                                 sx={{
-                                    p: 2,
-                                    borderRadius: 5,
-                                    border: '1px solid #f0f0f0',
-                                    bgcolor: 'white',
-                                    transition: 'all 0.2s ease',
-                                    '&:active': { transform: 'scale(0.97)', bgcolor: '#fafafa' }
+                                    p: 2, borderRadius: 5, border: '1px solid #f0f0f0', bgcolor: 'white',
+                                    transition: 'all 0.2s ease', '&:active': { transform: 'scale(0.97)', bgcolor: '#fafafa' }
                                 }}
                             >
                                 <Stack direction="row" spacing={2} alignItems="center">
@@ -194,19 +200,9 @@ export default function FinancialDashboard() {
                 })}
             </Stack>
 
-            {/* Bottom Info Bar */}
+            {/* Info Bar */}
             <Box sx={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: '90%', maxWidth: 400 }}>
-                <Paper
-                    elevation={10}
-                    sx={{
-                        p: 1.5,
-                        borderRadius: 4,
-                        bgcolor: 'rgba(255,255,255,0.9)',
-                        backdropFilter: 'blur(10px)',
-                        textAlign: 'center',
-                        border: '1px solid rgba(0,0,0,0.05)'
-                    }}
-                >
+                <Paper elevation={10} sx={{ p: 1.5, borderRadius: 4, bgcolor: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(10px)', textAlign: 'center', border: '1px solid rgba(0,0,0,0.05)' }}>
                     <Typography variant="caption" fontWeight="700" color="text.secondary">
                         Tocca una riga per mostrare i dettagli del singolo studente
                     </Typography>
@@ -215,26 +211,11 @@ export default function FinancialDashboard() {
         </Box>
     );
 
-    // Componente interno StatBox
     function StatBox({ title, value, icon, color }) {
         return (
-            <Paper
-                elevation={0}
-                sx={{
-                    p: 2,
-                    borderRadius: 5,
-                    border: '1px solid #f0f0f0',
-                    bgcolor: 'white',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 1
-                }}
-            >
+            <Paper elevation={0} sx={{ p: 2, borderRadius: 5, border: '1px solid #f0f0f0', bgcolor: 'white', display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <Stack direction="row" alignItems="center" spacing={1}>
-                    <Avatar
-                        variant="rounded"
-                        sx={{ bgcolor: `${color}.light`, color: `${color}.main`, width: 32, height: 32, borderRadius: 2 }}
-                    >
+                    <Avatar variant="rounded" sx={{ bgcolor: `${color}.light`, color: `${color}.main`, width: 32, height: 32, borderRadius: 2 }}>
                         {React.cloneElement(icon, { sx: { fontSize: 18 } })}
                     </Avatar>
                     <Typography variant="caption" fontWeight="800" color="text.secondary">{title}</Typography>

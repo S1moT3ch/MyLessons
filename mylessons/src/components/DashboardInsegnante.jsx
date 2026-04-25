@@ -54,6 +54,7 @@ export default function DashboardInsegnante() {
         Cookies.remove('user_session');
         // --- PULIZIA CACHE AL LOGOUT ---
         localStorage.removeItem('cache_subscribers');
+        localStorage.removeItem('cache_feedbacks')
         localStorage.removeItem('cache_absences');
         localStorage.removeItem('cache_schedules');
         navigate('/login', { replace: true });
@@ -61,13 +62,12 @@ export default function DashboardInsegnante() {
 
     const fetchDashboardData = useCallback(async (isSilent = false) => {
         if (!userData?.id_token) return;
-
         if (!isSilent) setLoading(true);
 
         try {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
 
-            // Avviamo le TRE chiamate in parallelo: Feedback, Iscritti e ora anche l'Agenda (Schedule)
+            // Carichiamo tutto in parallelo: Feedback, Studenti e Agenda
             const [resFb, resSubs, resSched] = await Promise.all([
                 fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
                 fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
@@ -78,24 +78,31 @@ export default function DashboardInsegnante() {
             const resultSubs = await resSubs.json();
             const resultSched = await resSched.json();
 
+            // 1. Gestione Feedback & Assenze
             if (resultFb.status === "success") {
                 const absences = resultFb.data.filter(f => f.status === "Assente");
                 setPendingAbsences(absences);
+
+                // Salviamo le assenze per il badge notifiche
                 localStorage.setItem('cache_absences', JSON.stringify(absences));
+
+                // --- AGGIUNTA: Salviamo TUTTI i feedback per la pagina dedicata ---
+                localStorage.setItem('cache_feedbacks', JSON.stringify(resultFb.data));
             }
 
+            // 2. Cache Studenti (usata da Anagrafica e Bilancio)
             if (resultSubs.status === "success") {
                 setSubscribers(resultSubs.data);
                 localStorage.setItem('cache_subscribers', JSON.stringify(resultSubs.data));
             }
 
-            // --- NUOVO: Salvataggio Agenda nella cache dalla Dashboard ---
+            // 3. Cache Agenda
             if (resultSched.status === "success") {
                 localStorage.setItem('cache_schedules', JSON.stringify(resultSched.data));
             }
 
         } catch (error) {
-            console.error("Errore recupero dati dashboard:", error);
+            console.error("Errore sincronizzazione dashboard:", error);
         } finally {
             setLoading(false);
         }
