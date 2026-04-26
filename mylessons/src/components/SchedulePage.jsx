@@ -137,33 +137,33 @@ export default function SchedulePage() {
     }, [getAuthData, navigate]);
 
     useEffect(() => {
-        // 1. Se ci sono cambiamenti non salvati, blocchiamo il caricamento dal server
+        // 1. Se l'utente sta modificando (editingSlot non è null),
+        // BLOCCA assolutamente ogni fetch dal server.
+        if (editingSlot !== null) return;
+
+        // 2. Se ci sono cambiamenti pendenti non salvati, non caricare.
         if (hasChanges) return;
 
-        // 2. Definiamo fetchData come dipendenza stabile (lo è già grazie a useCallback)
-        // Usiamo una variabile locale per la cache leggendo lo stato aggiornato
         const hasCache = localSchedules && localSchedules.length > 0;
 
+        // Solo se non stiamo editando e non abbiamo modifiche, sincronizziamo.
         fetchData(hasCache);
 
-        // ESLint si lamenta perché localSchedules.length non è qui sotto.
-        // Ma noi NON vogliamo che l'effetto scatti ogni volta che la lunghezza cambia,
-        // altrimenti quando aggiungi uno slot (lunghezza aumenta) lui ricaricherebbe tutto.
-
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [fetchData, hasChanges]);
-    
+    }, [fetchData, hasChanges, editingSlot]);
+
     useEffect(() => {
         const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible') {
-                console.log("Bentornato! Verifico la sessione...");
-                fetchData(); // Ricarica i dati e verifica il token automaticamente
+            // Ricarica solo se la pagina è visibile E NON ci sono modifiche non salvate
+            if (document.visibilityState === 'visible' && !hasChanges) {
+                console.log("Bentornato! Sincronizzazione silenziosa...");
+                fetchData(true);
             }
         };
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [fetchData]);
+    }, [fetchData, hasChanges]);
 
     const saveFullDay = async () => {
         if (saving) return;
@@ -547,12 +547,15 @@ export default function SchedulePage() {
                                                                     fullWidth
                                                                     variant="contained"
                                                                     onClick={() => {
+                                                                        // PRIMA segnaliamo che ci sono modifiche da salvare
                                                                         if (pendingChanges || hadChangesBeforeEditing) {
-                                                                            setHasChanges(true); // Questo riattiva il tasto anche se saving è true
+                                                                            setHasChanges(true);
                                                                         }
+
+                                                                        // POI chiudiamo l'interfaccia di editing
+                                                                        // Questo ordine è CRUCIALE per evitare il refresh automatico
                                                                         setEditingSlot(null);
                                                                         setPendingChanges(false);
-                                                                        setHadChangesBeforeEditing(false);
                                                                     }}
                                                                     sx={{ borderRadius: 3, textTransform: 'none', fontWeight: 'bold' }}
                                                                 >
