@@ -8,6 +8,19 @@ const DAY_MAP = {
   "Giovedì": 6, "Venerdì": 8, "Sabato": 10 
 };
 
+// --- FUNZIONI DI SUPPORTO (CACHE ISTANZE) ---
+const ssCache = { main: null, schedule: null };
+
+function getMainSS() {
+  if (!ssCache.main) ssCache.main = SpreadsheetApp.openById(SPREADSHEET_ID);
+  return ssCache.main;
+}
+
+function getScheduleSS() {
+  if (!ssCache.schedule) ssCache.schedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+  return ssCache.schedule;
+}
+
 /**
  * Crea un calendario fisico sul tuo account, lo nomina per il docente e lo condivide.
  * Ritorna l'ID del calendario creato.
@@ -60,6 +73,7 @@ function syncSchedulesToCalendar(calendarId, teacherName, allSchedules) {
     const calendar = CalendarApp.getCalendarById(calendarId);
     if (!calendar) return;
 
+    // 1. Finestra temporale di sincronizzazione
     const now = new Date();
     const startWindow = new Date(now);
     const dayOfWeek = now.getDay(); 
@@ -67,15 +81,15 @@ function syncSchedulesToCalendar(calendarId, teacherName, allSchedules) {
     startWindow.setDate(now.getDate() - diffToMonday);
     startWindow.setHours(0, 0, 0, 0);
     const endWindow = new Date(startWindow);
-    endWindow.setDate(startWindow.getDate() + 21); // Estesa a 3 settimane per sicurezza
+    endWindow.setDate(startWindow.getDate() + 21); 
 
+    // 2. Mappatura eventi esistenti
     const existingEvents = calendar.getEvents(startWindow, endWindow);
     const calendarMap = {};
 
     existingEvents.forEach(event => {
       const desc = event.getDescription() || "";
       if (desc.includes("[ID_LESSON_APP]")) {
-        // Estrazione fingerprint: cerchiamo tutto ciò che sta dopo [FP: e prima di ]
         const match = desc.match(/\[FP:(.*?)\]/);
         if (match && match[1]) {
           calendarMap[match[1]] = event;
@@ -83,42 +97,41 @@ function syncSchedulesToCalendar(calendarId, teacherName, allSchedules) {
       }
     });
 
-    const fingerprintsToKeep = new Set();
-
+    // 3. Ciclo sugli slot e creazione eventi INDIVIDUALI
     allSchedules.forEach(slot => {
       if (slot.email && slot.ora && slot.giorno) {
         const startTime = getStartDateFromSlot(slot.giorno, slot.ora);
-        const duration = 60; 
-        const endTime = new Date(startTime.getTime() + duration * 60000);
-
-        // --- NORMALIZZAZIONE FINGERPRINT ---
-        // 1. Pulizia estrema dell'email e dell'ora
-        const cleanEmail = slot.email.toLowerCase().trim();
-        const cleanTime = slot.ora.replace(/[^0-9]/g, ''); // Forza formato numerico es. "1030"
-        const cleanDay = slot.giorno.toLowerCase().trim();
+        const endTime = new Date(startTime.getTime() + 60 * 60000);
         
-        // 2. Generazione Fingerprint (includendo l'ora specifica per distinguere slot adiacenti)
-        const fingerprint = `FP_${teacherName}_${cleanDay}_${cleanTime}_${cleanEmail}`
-                            .replace(/[^a-zA-Z0-9_]/g, ''); // Rimuove tutto tranne lettere, numeri e underscore
+        // Splittiamo le email per creare eventi separati
+        const emails = slot.email.split(",").map(e => e.trim()).filter(e => e !== "");
+        const nomi = (slot.nome || "").split(",").map(n => n.trim());
 
-        fingerprintsToKeep.add(fingerprint);
+        emails.forEach((email, index) => {
+          const studentName = nomi[index] || email;
+          const cleanEmail = email.toLowerCase();
+          const cleanTime = slot.ora.replace(/[^0-9]/g, '');
+          const cleanDay = slot.giorno.toLowerCase().trim();
+          
+          // Il fingerprint ora è univoco per studente: include l'email del singolo
+          const fingerprint = `FP_${teacherName}_${cleanDay}_${cleanTime}_${cleanEmail}`.replace(/[^a-zA-Z0-9_]/g, '');
 
-        if (calendarMap[fingerprint]) {
-          console.log("MANTENGO: " + fingerprint);
-          delete calendarMap[fingerprint]; // Rimosso dalla lista dei "da cancellare"
-        } else {
-          console.log("CREO NUOVO: " + fingerprint);
-          const newEvent = calendar.createEvent(`${slot.nome || "Studente"}`, startTime, endTime, {
-            description: `Ragazzo: ${slot.email}\n[ID_LESSON_APP]\n[FP:${fingerprint}]`,
-            guests: slot.email,
-            sendInvites: true
-          });
-          newEvent.addPopupReminder(0);
-        }
+          if (calendarMap[fingerprint]) {
+            // Se l'evento esiste già per questo studente, lo manteniamo
+            delete calendarMap[fingerprint];
+          } else {
+            // Creiamo l'evento individuale
+            calendar.createEvent(`${studentName}`, startTime, endTime, {
+              description: `Docente: ${teacherName}\nStudente: ${email}\n[ID_LESSON_APP]\n[FP:${fingerprint}]`,
+              guests: email, // Un solo invitato per evento
+              sendInvites: true
+            }).addPopupReminder(0);
+          }
+        });
       }
     });
 
-    // 4. CANCELLAZIONE: Solo ciò che non era presente nel nuovo invio
+    // 4. CANCELLAZIONE: Rimuove gli eventi che non sono più nell'agenda (inclusi studenti rimossi da un gruppo)
     for (let fp in calendarMap) {
       console.log("RIMUOVO OBSOLETO: " + fp);
       calendarMap[fp].deleteEvent();
@@ -161,6 +174,114 @@ function getStartDateFromSlot(dayName, timeStr) {
   return targetDate;
 }
 
+function handleStudentFeedback(requestData) {
+  try {
+    const ssMain = getMainSS(); 
+    let sheet = ssMain.getSheetByName("Feedback");
+    
+    // 1. Creazione/Controllo intestazioni (aggiungiamo la colonna E)
+    if (!sheet) {
+      sheet = ssMain.insertSheet("Feedback");
+      sheet.appendRow(["ID_Univoco", "Status", "Nota", "Preferenza_Alternativa", "Data_Aggiornamento"]);
+      sheet.getRange("1:1").setFontWeight("bold").setBackground("#f3f3f3");
+    }
+
+    const { studentEmail, teacherName, giorno, ora, status, note, preferenza } = requestData;
+    
+    const cleanEmail = studentEmail ? studentEmail.toLowerCase().trim() : "unknown";
+    const cleanTime = ora ? ora.replace(/[^0-9]/g, '') : "0000";
+    const uniqueKey = `${teacherName}-${giorno}-${cleanTime}-${cleanEmail}`;
+    
+    const data = sheet.getDataRange().getValues();
+    let rowIndex = -1;
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === uniqueKey) {
+        rowIndex = i + 1;
+        break;
+      }
+    }
+
+    const timestamp = new Date();
+    // La "preferenza" sarà una stringa tipo "Lunedì alle 15:00"
+    let finalPref = "";
+    if (preferenza) {
+      // Se la preferenza contiene un'ora, ci assicuriamo che abbia il punto
+      // Esempio: "Lunedì 1700" -> "Lunedì 17.00"
+      finalPref = preferenza.replace(/(\d{2})(\d{2})/, "$1:$2");
+    }
+
+    if (rowIndex === -1) {
+      // 2. Inserimento (Colonna A, B, C, D, E)
+      sheet.appendRow([uniqueKey, status, note, finalPref, timestamp]);
+    } else {
+      // 3. Aggiornamento (Colonne B, C, D, E)
+      // Range: riga trovata, colonna 2, 1 riga, 4 colonne totali
+      sheet.getRange(rowIndex, 2, 1, 4).setValues([[status, note, finalPref, timestamp]]);
+    }
+
+    return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
+
+  } catch (error) {
+    return ContentService.createTextOutput("Error: " + error.toString()).setMimeType(ContentService.MimeType.TEXT);
+  }
+}
+
+function handleGetTeacherFeedbackSummary(teacherName) {
+  const ssMain = SpreadsheetApp.getActiveSpreadsheet(); // o la tua funzione getMainSS()
+  const feedbackSheet = ssMain.getSheetByName("Feedback");
+  const studentiSheet = ssMain.getSheetByName("Studenti");
+  
+  if (!feedbackSheet) return createJsonResponse({ status: "success", data: [] });
+  
+  // 1. Creiamo mappe per ID e per Email
+  const idToNameMap = {};
+  const emailToNameMap = {};
+  
+  if (studentiSheet) {
+    const studentiData = studentiSheet.getDataRange().getValues();
+    for (let i = 1; i < studentiData.length; i++) {
+      const idGoogle = studentiData[i][0] ? studentiData[i][0].toString().trim() : ""; // Colonna A
+      const email = studentiData[i][1] ? studentiData[i][1].toString().toLowerCase().trim() : ""; // Colonna B
+      const nome = studentiData[i][2] ? studentiData[i][2].toString().trim() : "";      // Colonna C
+      const cognome = studentiData[i][3] ? studentiData[i][3].toString().trim() : "";   // Colonna D
+      
+      const nomeCompleto = `${nome} ${cognome}`.trim();
+      
+      if (idGoogle) idToNameMap[idGoogle] = nomeCompleto;
+      if (email) emailToNameMap[email] = nomeCompleto;
+    }
+  }
+
+  const fbData = feedbackSheet.getDataRange().getValues();
+  const teacherNameClean = teacherName.toLowerCase().trim();
+
+  const result = [];
+  for (let i = 1; i < fbData.length; i++) {
+    const key = fbData[i][0].toString();
+    
+    if (key.toLowerCase().startsWith(teacherNameClean)) {
+      const parts = key.split("-");
+      const identifier = parts[parts.length - 1].trim().toLowerCase();
+      
+      const trovato = idToNameMap[identifier] || emailToNameMap[identifier];
+      
+      result.push({
+        studentName: trovato || identifier,
+        giorno: parts[1] || "",
+        ora: parts[2] || "",
+        status: fbData[i][1] || "",
+        note: fbData[i][2] || "",
+        preferenza: fbData[i][3] || "", // <--- LEGGI LA COLONNA D
+        timestamp: fbData[i][4] || ""    // <--- IL TIMESTAMP SCALA ALLA COLONNA E (indice 4)
+      });
+    }
+  }
+  
+  result.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return createJsonResponse({ status: "success", data: result });
+}
+
 /**
  * Ottiene o crea il foglio dell'insegnante con intestazioni predefinite
  */
@@ -180,13 +301,48 @@ function getTeacherSheet(ss, teacherName) {
   return sheet;
 }
 
+function clearWeeklyFeedbacks() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetFeedback = ss.getSheetByName("Feedback"); // Assicurati che il nome sia corretto
+  
+  if (sheetFeedback) {
+    const lastRow = sheetFeedback.getLastRow();
+    
+    // Se ci sono dati oltre l'intestazione (riga 1), procedi alla pulizia
+    if (lastRow > 1) {
+      // Pulisce dalla riga 2 fino all'ultima riga, per tutte le colonne
+      sheetFeedback.getRange(2, 1, lastRow - 1, sheetFeedback.getLastColumn()).clearContent();
+      
+      console.log("Feedback settimanali puliti con successo.");
+      
+      // Opzionale: Aggiorna la proprietà di sistema per forzare il refresh nel frontend
+      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
+    }
+  }
+}
+
 function verifyToken(idToken) {
   if (!idToken) return null;
+  
+  const cache = CacheService.getScriptCache();
+  // Usiamo una versione "pulita" del token come chiave (max 250 caratteri per la cache)
+  const cacheKey = "token_" + idToken.substring(idToken.length - 100).replace(/[^a-zA-Z0-9]/g, "");
+  
+  // 1. Controlla se il token è già stato validato di recente
+  const cachedEmail = cache.get(cacheKey);
+  if (cachedEmail) return cachedEmail;
+
   try {
     const response = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken);
     const payload = JSON.parse(response.getContentText());
+    
     if (payload.aud !== MY_CLIENT_ID) return null;
-    return payload.email; 
+    
+    const email = payload.email;
+    // 2. Salva l'email in cache per 30 minuti (1800 secondi)
+    cache.put(cacheKey, email, 1800);
+    
+    return email; 
   } catch (e) {
     console.error("Errore verifica token: " + e.toString());
     return null;
@@ -243,31 +399,72 @@ function doGet(e) {
       return createJsonResponse({ status: "error", message: "Non autorizzato: Sessione non valida" });
     }
 
-    // --- 4. AGENDA PERSONALE STUDENTE (Ricerca Globale su tutti i fogli Docenti) ---
     if (action === "getStudentPersonalSchedule") {
       const studentEmail = authenticatedEmail.toLowerCase().trim();
-      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+      
+      // 1. Recuperiamo tutti i feedback dello studente dal foglio "Feedback"
+      const ssMain = getMainSS();
+      const feedbackSheet = ssMain.getSheetByName("Feedback");
+      const feedbackMap = {};
+      
+      if (feedbackSheet) {
+        const fbData = feedbackSheet.getDataRange().getValues();
+        // La chiave nel foglio Feedback è: Docente-Giorno-Ora-Email
+        for (let i = 1; i < fbData.length; i++) {
+          const key = fbData[i][0];
+          if (key.includes(studentEmail)) {
+            feedbackMap[key] = {
+              status: fbData[i][1],
+              note: fbData[i][2],
+              preferenza: fbData[i][3]
+            };
+          }
+        }
+      }
+
+      // 2. Recuperiamo gli slot orari (logica che avevi già)
+      const ssSchedule = getScheduleSS();
       const sheets = ssSchedule.getSheets();
       const result = [];
 
       sheets.forEach(sheet => {
-        const data = sheet.getDataRange().getValues();
+        const data = sheet.getDataRange().getDisplayValues();
+        if (data.length < 2) return;
         const teacherName = sheet.getName();
-        for (let giorno in DAY_MAP) {
-          let colOra = DAY_MAP[giorno];
-          let colStudente = colOra + 1;
+
+        Object.keys(DAY_MAP).forEach(giorno => {
+          const colOra = DAY_MAP[giorno];
+          const colStudente = colOra + 1;
+
           for (let r = 1; r < data.length; r++) {
-            let emailCella = data[r][colStudente] ? data[r][colStudente].toString().toLowerCase().trim() : "";
-            if (emailCella === studentEmail) {
-              result.push({
-                giorno: giorno,
-                ora: data[r][colOra].toString().trim(),
-                teacherName: teacherName
+            const cellaEmailRaw = data[r][colStudente] ? data[r][colStudente].toLowerCase() : "";
+            const listaEmail = cellaEmailRaw.split(",").map(e => e.trim());
+
+            if (listaEmail.includes(studentEmail)) {
+              const ora = data[r][colOra].toString().trim();
+              const cleanTime = ora.replace(/[^0-9]/g, '');
+              
+              // GENERIAMO LA CHIAVE PER IL CONFRONTO
+              const uniqueKey = `${teacherName}-${giorno}-${cleanTime}-${studentEmail}`;
+              
+              // UNIAMO IL FEEDBACK SE ESISTE, ALTRIMENTI "In attesa"
+              const fb = feedbackMap[uniqueKey] || { status: "In attesa", note: "" };
+
+              result.push({ 
+                giorno: giorno, 
+                ora: ora, 
+                teacherName: teacherName,
+                feedbacks: [fb] // Lo passiamo come array per coerenza con il frontend
               });
             }
           }
-        }
+        });
       });
+
+      // Ordinamento per giorno
+      const dayOrder = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+      result.sort((a, b) => dayOrder.indexOf(a.giorno) - dayOrder.indexOf(b.giorno));
+
       return createJsonResponse({ status: "success", data: result });
     }
 
@@ -286,42 +483,51 @@ function doGet(e) {
       return createJsonResponse({ status: "success", data: mySubs });
     }
 
-    // --- 6. STUDENTI ISCRITTI (Vista Docente - Chi segue il mio corso) ---
+    // --- 6. STUDENTI ISCRITTI (Vista Docente - Ottimizzata) ---
     if (action === "getTeacherSubscribers") {
       const teacherId = e.parameter.teacherId;
       const sheetIscrizioni = ss.getSheetByName("Iscrizioni");
       const sheetStudenti = ss.getSheetByName("Studenti");
       
-      if (!sheetIscrizioni || !sheetStudenti) return createJsonResponse({ status: "success", data: [] });
+      if (!sheetIscrizioni || !sheetStudenti) {
+        return createJsonResponse({ status: "success", data: [] });
+      }
 
-      // 1. Apriamo il file degli orari per il conteggio settimanale
+      // 1. Lettura BATCH dei dati anagrafici (una sola chiamata al server)
+      const iscrizioniData = sheetIscrizioni.getDataRange().getValues();
+      const studentiData = sheetStudenti.getDataRange().getValues().slice(1);
+      
+      // Creazione Mappa Nomi in memoria: velocizza il lookup degli studenti
+      const nomiStudenti = {};
+      studentiData.forEach(r => { 
+        if(r[1]) nomiStudenti[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; 
+      });
+
+      // 2. Conteggio settimanale efficiente (Scansione file Orari)
       const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
       const allScheduleSheets = ssSchedule.getSheets();
       const weeklyCounts = {};
 
-      // Conteggio delle occorrenze di ogni email negli orari correnti
+      // Indici delle colonne email basati sul tuo DAY_MAP (es. 1, 3, 5, 7, 9, 11)
+      const emailColumnIndices = Object.values(DAY_MAP).map(colIdx => colIdx + 1);
+
       allScheduleSheets.forEach(s => {
         const data = s.getDataRange().getValues();
+        if (data.length < 2) return; // Salta fogli vuoti o solo intestazione
+
+        // Processamento in RAM: evitiamo cicli for pesanti sulle celle
         for (let r = 1; r < data.length; r++) {
-          // Controlliamo le colonne delle email (colonne B, D, F, H, J, L -> indici 1, 3, 5, 7, 9, 11)
-          for (let c = 1; c < data[0].length; c += 2) {
+          emailColumnIndices.forEach(c => {
             const email = data[r][c] ? data[r][c].toString().toLowerCase().trim() : "";
-            if (email) {
+            if (email && email.includes("@")) {
               weeklyCounts[email] = (weeklyCounts[email] || 0) + 1;
             }
-          }
+          });
         }
       });
 
-      const iscrizioni = sheetIscrizioni.getDataRange().getValues().slice(1);
-      const studenti = sheetStudenti.getDataRange().getValues().slice(1);
-      
-      const nomiStudenti = {};
-      studenti.forEach(r => { 
-        nomiStudenti[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; 
-      });
-
-      const result = iscrizioni
+      // 3. Filtraggio e costruzione del JSON finale
+      const result = iscrizioniData.slice(1)
         .filter(row => row[2].toString() === teacherId.toString())
         .map(row => {
           const email = row[1].toLowerCase().trim();
@@ -329,46 +535,77 @@ function doGet(e) {
             studentName: nomiStudenti[email] || "Sconosciuto",
             studentEmail: row[1],
             date: row[4],
-            // Questo è il valore che mancava e che causava "undefined"
-            lessonCount: weeklyCounts[email] || 0, 
-            // Valori storici persistenti salvati nelle colonne F e G
-            lezioniSvolte: row[5] || 0,
-            lezioniDaPagare: row[6] || 0,
-            tariffa: row[7] || 0
+            lessonCount: weeklyCounts[email] || 0, // Ore totali assegnate questa settimana
+            lezioniSvolte: Number(row[5]) || 0,     // Storico colonna F
+            lezioniDaPagare: Number(row[6]) || 0,  // Storico colonna G
+            tariffa: Number(row[7]) || 0           // Colonna H
           };
         });
 
       return createJsonResponse({ status: "success", data: result });
     }
 
-    // --- 7. AGENDA COMPLETA DOCENTE (Dal proprio foglio specifico) ---
+    // --- 7. AGENDA COMPLETA DOCENTE (Ottimizzata per studenti illimitati) ---
     if (action === "getStudentSchedules") {
       const teacherName = e.parameter.teacherName;
       const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
       const sheetOrari = getTeacherSheet(ssSchedule, teacherName);
+      
+      // 1. Caricamento BATCH dei dati dell'orario
       const data = sheetOrari.getDataRange().getValues();
+      if (data.length < 2) return createJsonResponse({ status: "success", data: [] });
 
-      const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
-      const studentiData = ssMain.getSheetByName("Studenti").getDataRange().getValues().slice(1);
-      const nomiMap = {};
-      studentiData.forEach(r => { if(r[1]) nomiMap[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; });
+      // 2. Recupero Nomi Studenti (Ottimizzato con Cache)
+      const cache = CacheService.getScriptCache();
+      let nomiMap = JSON.parse(cache.get("student_names_map") || "null");
+
+      if (!nomiMap) {
+        const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
+        const studentiSheet = ssMain.getSheetByName("Studenti");
+        const studentiData = studentiSheet ? studentiSheet.getDataRange().getValues().slice(1) : [];
+        nomiMap = {};
+        studentiData.forEach(r => { 
+          if(r[1]) nomiMap[r[1].toLowerCase().trim()] = r[2] + " " + r[3]; 
+        });
+        cache.put("student_names_map", JSON.stringify(nomiMap), 3600);
+      }
 
       const result = [];
-      for (let giorno in DAY_MAP) {
-        let colOra = DAY_MAP[giorno];
-        let colStudente = colOra + 1;
+      const days = Object.keys(DAY_MAP);
+
+      // 3. Processamento efficiente in RAM con gestione MULTI-STUDENTE
+      days.forEach(giorno => {
+        const colOra = DAY_MAP[giorno];
+        const colStudente = colOra + 1;
+
         for (let r = 1; r < data.length; r++) {
-          if (data[r][colOra]) {
-            let email = data[r][colStudente] ? data[r][colStudente].toString().toLowerCase().trim() : "";
+          const oraVal = data[r][colOra];
+          if (oraVal) {
+            const emailsStr = data[r][colStudente] ? data[r][colStudente].toString() : "";
+            
+            // --- LOGICA MULTI-STUDENTE ---
+            // Splittiamo la stringa delle email (es: "mario@test.it, luca@test.it")
+            const emailList = emailsStr.split(",")
+              .map(e => e.trim())
+              .filter(e => e !== "");
+
+            // Creiamo l'array di oggetti richiesto dal nuovo frontend ottimizzato
+            const studentsArray = emailList.map(email => ({
+              email: email,
+              nome: nomiMap[email.toLowerCase()] || email
+            }));
+
             result.push({
               giorno: giorno,
-              ora: data[r][colOra].toString().trim(),
-              email: email,
-              nome: nomiMap[email] || email
+              ora: oraVal.toString().trim(),
+              email: emailsStr, // Manteniamo la stringa per compatibilità con vecchi componenti
+              students: studentsArray, // Array per i Chip dinamici del frontend
+              nome: studentsArray.length > 0 ? studentsArray[0].nome : "" // Fallback primo nome
             });
           }
         }
-      }
+      });
+
       return createJsonResponse({ status: "success", data: result });
     }
 
@@ -400,11 +637,16 @@ function doGet(e) {
       return createJsonResponse({ status: "success", data: result });
     }
 
+    if (action === "getTeacherFeedbackSummary") {
+      return handleGetTeacherFeedbackSummary(e.parameter.teacherName)
+    }
+
     return createJsonResponse({ status: "error", message: "Azione non riconosciuta" });
 
   } catch (error) { 
     return createJsonResponse({ status: "error", message: error.toString() }); 
   }
+  
 }
 
 function doPost(e) {
@@ -418,104 +660,101 @@ function doPost(e) {
     if (action === "saveFullSchedule") {
       if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
       
-      const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
-      const sheet = getTeacherSheet(ssSchedule, requestData.teacherName);
-      const ssMain = SpreadsheetApp.openById(SPREADSHEET_ID);
-      const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
+      const ssSchedule = getScheduleSS();
       const teacherName = requestData.teacherName;
+      const sheet = getTeacherSheet(ssSchedule, teacherName);
+      const ssMain = getMainSS();
+      const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
+      const allSchedules = requestData.allSchedules; // Array di oggetti con {giorno, ora, email (che contiene stringa con virgole)}
 
-      // Recupero CalendarID per la sincronizzazione
-      const sheetInsegnanti = ssMain.getSheetByName("Insegnanti");
-      const insData = sheetInsegnanti.getDataRange().getValues();
-      let calendarId = null;
-      for(let i=1; i<insData.length; i++) {
-        if (insData[i][1] === authenticatedEmail) {
-          calendarId = insData[i][7]; // Colonna H
-          break;
-        }
-      }
-      
-      // 1. FOTO DELLA SITUAZIONE ATTUALE (Prima del salvataggio)
+      // 1. Lettura BATCH iniziale
       const oldData = sheet.getDataRange().getValues();
-      const oldAssignments = {}; 
+      const iscrizioniRange = sheetIscrizioni.getDataRange();
+      const iscrizioniValues = iscrizioniRange.getValues();
+      const insData = ssMain.getSheetByName("Insegnanti").getDataRange().getValues();
       
+      const teacherRow = insData.find(r => r[1] === authenticatedEmail);
+      const calendarId = teacherRow ? teacherRow[7] : null;
+
+      // 2. Mappa situazione attuale (Splittiamo le email esistenti per il confronto)
+      const oldAssignments = {}; 
       for (let giorno in DAY_MAP) {
         let colOra = DAY_MAP[giorno];
         for (let r = 1; r < oldData.length; r++) {
           let ora = oldData[r][colOra];
-          let email = oldData[r][colOra + 1] ? oldData[r][colOra + 1].toString().toLowerCase().trim() : "";
-          if (ora && email) oldAssignments[`${giorno}-${ora}`] = email;
+          let emailsStr = oldData[r][colOra + 1] ? oldData[r][colOra + 1].toString().toLowerCase().trim() : "";
+          if (ora && emailsStr) {
+            // Creiamo un array di email per quello slot
+            oldAssignments[`${giorno}-${ora}`] = emailsStr.split(",").map(e => e.trim());
+          }
         }
       }
 
-      const allSchedules = requestData.allSchedules; 
-      const netChanges = {}; // Mappa dei cambiamenti netti { email: +1 o -1 }
-
-      // 2. CALCOLO DIFFERENZE (Logica corretta)
+      // --- 3. RICALCOLO TOTALE CONTATORI (Invece di netChanges) ---
+      // Invece di calcolare la differenza, contiamo quante volte ogni email appare nel NUOVO orario
+      const newCounts = {};
       allSchedules.forEach(item => {
-        const key = `${item.giorno}-${item.ora}`;
-        const newEmail = item.email ? item.email.toLowerCase().trim() : "";
-        const oldEmail = oldAssignments[key] || "";
-
-        if (newEmail !== oldEmail) {
-          // Se c'era qualcuno e ora non c'è più (o c'è un altro), togliamo 1 al vecchio
-          if (oldEmail !== "") {
-            netChanges[oldEmail] = (netChanges[oldEmail] || 0) - 1;
+          if (item.email) {
+              const emails = item.email.split(",").map(e => e.trim().toLowerCase());
+              emails.forEach(email => {
+                  if (email) newCounts[email] = (newCounts[email] || 0) + 1;
+              });
           }
-          // Se ora c'è qualcuno, aggiungiamo 1 al nuovo
-          if (newEmail !== "") {
-            netChanges[newEmail] = (netChanges[newEmail] || 0) + 1;
-          }
-        }
       });
 
-      // 3. AGGIORNAMENTO PERSISTENTE NELLO SHEET ISCRIZIONI
-      if (Object.keys(netChanges).length > 0) {
-        const iscrizioniRange = sheetIscrizioni.getDataRange();
-        const iscrizioniValues = iscrizioniRange.getValues();
-        
-        for (let email in netChanges) {
-          if (netChanges[email] === 0) continue; 
+      // Contiamo quante volte ogni email appariva nel VECCHIO orario
+      const oldCounts = {};
+      for (let key in oldAssignments) {
+          oldAssignments[key].forEach(email => {
+              if (email) oldCounts[email] = (oldCounts[email] || 0) + 1;
+          });
+      }
 
+      // Calcoliamo la differenza reale tra nuovo e vecchio conteggio per ogni studente
+      const studentEmails = new Set([...Object.keys(newCounts), ...Object.keys(oldCounts)]);
+      const finalDiffs = {};
+      studentEmails.forEach(email => {
+          const diff = (newCounts[email] || 0) - (oldCounts[email] || 0);
+          if (diff !== 0) finalDiffs[email] = diff;
+      });
+
+      // 4. Aggiornamento BATCH foglio Iscrizioni usando finalDiffs
+      if (Object.keys(finalDiffs).length > 0) {
           for (let i = 1; i < iscrizioniValues.length; i++) {
-            // Verifica Email (Col B)
-            if (iscrizioniValues[i][1].toLowerCase().trim() === email) {
-              let currentSvolte = Number(iscrizioniValues[i][5]) || 0; // Col F (Svolte)
-              let currentDaPagare = Number(iscrizioniValues[i][6]) || 0; // Col G (Da Pagare)
-              
-              // Applichiamo il cambiamento calcolato
-              sheetIscrizioni.getRange(i + 1, 6).setValue(Math.max(0, currentSvolte + netChanges[email]));
-              sheetIscrizioni.getRange(i + 1, 7).setValue(Math.max(0, currentDaPagare + netChanges[email]));
-            }
+              const email = iscrizioniValues[i][1].toString().toLowerCase().trim();
+              if (finalDiffs[email]) {
+                  // Aggiorniamo basandoci sulla differenza di conteggio totale
+                  iscrizioniValues[i][5] = Math.max(0, (Number(iscrizioniValues[i][5]) || 0) + finalDiffs[email]); 
+                  iscrizioniValues[i][6] = Math.max(0, (Number(iscrizioniValues[i][6]) || 0) + finalDiffs[email]);
+              }
+          }
+          iscrizioniRange.setValues(iscrizioniValues);
+      }
+
+      // 5. Preparazione BATCH foglio Orari (12 colonne standard)
+      const newScheduleMatrix = Array.from({ length: 50 }, () => Array(12).fill(""));
+      
+      allSchedules.forEach(item => {
+        const startCol = DAY_MAP[item.giorno];
+        for (let r = 0; r < 50; r++) {
+          if (!newScheduleMatrix[r][startCol]) {
+            newScheduleMatrix[r][startCol] = item.ora;
+            // Salviamo la stringa con virgole (es: "mario@gmail.com, luca@gmail.com")
+            newScheduleMatrix[r][startCol + 1] = item.email; 
+            break;
           }
         }
-      }
-
-      // 4. SCRITTURA FISICA SUL FOGLIO ORARI (Sostituzione integrale)
-      for (let giorno in DAY_MAP) {
-        let colOraIndex = DAY_MAP[giorno] + 1;
-        sheet.getRange(2, colOraIndex, 50, 2).clearContent(); 
-      }
-
-      const dataByDay = {};
-      allSchedules.forEach(item => {
-        if (!dataByDay[item.giorno]) dataByDay[item.giorno] = [];
-        dataByDay[item.giorno].push(item);
       });
+      sheet.getRange(2, 1, 50, 12).setValues(newScheduleMatrix);
 
-      for (let giorno in dataByDay) {
-        let startCol = DAY_MAP[giorno] + 1;
-        let dayItems = dataByDay[giorno].sort((a, b) => a.ora.localeCompare(b.ora));
-        dayItems.forEach((item, index) => {
-          let rowNum = index + 2;
-          sheet.getRange(rowNum, startCol).setValue(item.ora);
-          sheet.getRange(rowNum, startCol + 1).setValue(item.email);
-        });
-      }
-
+      // 6. Sincronizzazione Calendario
       if (calendarId) {
+        // Nota: allSchedules deve contenere gli studenti splittati per creare eventi singoli
         syncSchedulesToCalendar(calendarId, teacherName, allSchedules);
       }
+
+      PropertiesService.getScriptProperties().setProperty('LAST_SCHEDULE_UPDATE', Array.from(new Date().getTime().toString()));
+      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
 
       return createTextResponse("Success");
     }
@@ -593,13 +832,26 @@ function doPost(e) {
         syncSchedulesToCalendar(calendarId, teacherName, []);
         console.log("Calendario resettato per: " + teacherName);
       }
-      
+
+      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
       return createTextResponse("Success");
     }
 
     if (action === "removeSlotAndDecrement") {
       const data = JSON.parse(e.postData.contents);
       const { studentEmail, teacherName } = data;
+      
+      // CREA UNA CHIAVE DI IDEMPOTENZA
+      const lockKey = "lock_" + studentEmail + "_" + teacherName;
+      const scriptProperties = PropertiesService.getScriptProperties();
+      const lastCall = scriptProperties.getProperty(lockKey);
+      const now = new Date().getTime();
+
+      // Se l'ultima chiamata è avvenuta meno di 2 secondi fa, ignoriamo questa
+      if (lastCall && (now - parseInt(lastCall)) < 2000) {
+        return createTextResponse("Ignored: Duplicated request");
+      }
+      scriptProperties.setProperty(lockKey, now.toString());
       
       if (!studentEmail) return createTextResponse("Success: Slot vuoto rimosso");
 
@@ -619,11 +871,17 @@ function doPost(e) {
           break;
         }
       }
+      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
       return createTextResponse("Success: Contatori aggiornati");
+    }
+
+    if (action === "updateStudentFeedback") {
+      return handleStudentFeedback(requestData);
     }
 
     if (action === "subscribe") {
       if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
+      CacheService.getScriptCache().remove("student_names_map");
       const sheet = ssMain.getSheetByName("Iscrizioni");
       sheet.appendRow([requestData.studentId, authenticatedEmail, requestData.teacherId, requestData.teacherName, new Date(), 0, 0]);
       return createTextResponse("Success");
@@ -631,71 +889,59 @@ function doPost(e) {
 
     if (requestData.id_token && !action) {
       console.log("Entrato nel blocco Registrazione/Login");
-      // 1. Recupero dati da Google Token
       const tokenResponse = UrlFetchApp.fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + requestData.id_token);
       const googleUser = JSON.parse(tokenResponse.getContentText());
       
       const role = requestData.role;
-      const teacherEmail = googleUser.email; // Verifichiamo che questa non sia undefined
+      const teacherEmail = googleUser.email;
       const teacherFullName = googleUser.given_name + " " + googleUser.family_name;
-
-      console.log("Accesso rilevato per: " + teacherEmail + " con ruolo: " + role);
 
       let sheet = ssMain.getSheetByName(role === "Insegnante" ? "Insegnanti" : "Studenti");
       const data = sheet.getDataRange().getValues();
       let userRowIndex = -1;
-      let existingCalId = "";
 
-      // 2. Ricerca utente e Calendar ID esistente
+      // 1. Cerchiamo se l'utente esiste già
       for (let i = 0; i < data.length; i++) { 
         if (data[i][0] === googleUser.sub) { 
           userRowIndex = i + 1; 
-          if (role === "Insegnante") {
-             // Prendiamo l'ID dalla colonna H (indice 7) se esiste
-             existingCalId = data[i][7] || ""; 
-          }
           break; 
         } 
       }
 
-      let calId = existingCalId;
+      // 2. AZIONE SOLO SE L'UTENTE È NUOVO (REGISTRAZIONE)
+      if (userRowIndex === -1) {
+        console.log("Nuovo utente! Scrivo i dati per la prima e unica volta.");
 
-      // 3. Logica specifica per l'Insegnante (Creazione + Condivisione)
-      if (role === "Insegnante") {
-        if (!calId || calId === "") {
-          console.log("ID Calendario mancante. Avvio creazione e condivisione per: " + teacherEmail);
-          
-          // PASSIAMO L'EMAIL ESPLICITAMENTE
+        let calId = "";
+        if (role === "Insegnante") {
+          // Creazione calendario solo alla prima registrazione
           calId = createAndShareTeacherCalendar(teacherEmail, teacherFullName);
-        } else {
-          console.log("L'insegnante ha già un calendario associato: " + calId);
+          
+          // Inizializzazione foglio orari fisico
+          const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
+          getTeacherSheet(ssSchedule, teacherFullName);
         }
 
-        // Inizializza comunque il foglio orari fisico
-        const ssSchedule = SpreadsheetApp.openById(SCHEDULE_FILE_ID);
-        getTeacherSheet(ssSchedule, teacherFullName);
-      }
+        // Prepariamo la riga completa
+        const rowData = [
+          googleUser.sub,          // Col A
+          teacherEmail,            // Col B
+          googleUser.given_name,   // Col C
+          googleUser.family_name,  // Col D
+          googleUser.picture,      // Col E
+          new Date(),              // Col F (Data Iscrizione fissa)
+          role,                    // Col G
+          calId || ""              // Col H
+        ];
 
-      // 4. Preparazione riga dati (8 colonne)
-      // Forza la costruzione di un array di ESATTAMENTE 8 elementi
-      const rowData = [
-        googleUser.sub,          // Col A (0)
-        teacherEmail,            // Col B (1)
-        googleUser.given_name,   // Col C (2)
-        googleUser.family_name,  // Col D (3)
-        googleUser.picture,      // Col E (4)
-        new Date(),              // Col F (5)
-        role,                    // Col G (6)
-        calId || ""              // Col H (7) 
-      ];
-
-      if (userRowIndex !== -1) {
-        // Aggiorna la riga esistente assicurandoti di coprire fino alla colonna 8 (H)
-        sheet.getRange(userRowIndex, 1, 1, 8).setValues([rowData]);
-        console.log("Riga aggiornata per docente con CalID: " + calId);
-      } else {
+        // Scrittura fisica sul foglio: avviene SOLO ORA
         sheet.appendRow(rowData);
-        console.log("Nuova riga aggiunta per docente con CalID: " + calId);
+        
+      } else {
+        // 3. LOGICA DI LOGIN SUCCESSIVO
+        // Non facciamo nulla: il foglio non viene aperto in scrittura.
+        // L'utente esiste già, quindi restituiamo semplicemente Success al frontend.
+        console.log("Utente già presente. Dati anagrafici non modificati.");
       }
 
       return createTextResponse("Success");
