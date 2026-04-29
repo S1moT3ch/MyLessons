@@ -5,14 +5,13 @@ import {
     ToggleButton, ToggleButtonGroup, Tab, Tabs,
     Divider, Button, Collapse, Dialog, DialogTitle,
     DialogContent, DialogActions, Snackbar, Alert,
-    List, ListItem, ListItemText, ListItemIcon
+    Table, TableBody, TableCell, TableContainer, TableHead, TableRow
 } from '@mui/material';
 import {
     ArrowBack as ArrowBackIcon,
     CalendarMonth as CalendarIcon,
     CheckCircle as DoneIcon,
     AutoAwesome as AiIcon,
-    InfoOutlined as InfoIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
@@ -37,14 +36,22 @@ export default function TeacherFeedbackPage() {
     const [loading, setLoading] = useState(feedbackList.length === 0);
     const [isResolving, setIsResolving] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
+    const [tabDayAI, setTabDayAI] = useState(0);
 
     // --- STATI NOTIFICHE E DIALOG ---
     const [confirmDialog, setConfirmDialog] = useState({ open: false, item: null, idx: null });
     const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
     const [errorDialog, setErrorDialog] = useState({ open: false, title: '', message: '' });
-    const [aiDialog, setAiDialog] = useState({ open: false, suggestions: [] });
+    // Stato per i suggerimenti AI con recupero da cache
+    const [aiDialog, setAiDialog] = useState(() => {
+        const savedAi = localStorage.getItem('cache_ai_suggestions');
+        return {
+            open: false,
+            suggestions: savedAi ? JSON.parse(savedAi) : []
+        };
+    });
 
-    // Filtri
+    // --- FILTRI ---
     const [viewFilter, setViewFilter] = useState('today');
     const [selectedDay, setSelectedDay] = useState(
         new Date().toLocaleDateString('it-IT', { weekday: 'long' }).charAt(0).toUpperCase() +
@@ -89,15 +96,10 @@ export default function TeacherFeedbackPage() {
         }
     }, [navigate]);
 
-    useEffect(() => {
-        const hasCache = feedbackList.length > 0;
-        fetchData(hasCache);
-    }, [fetchData]);
-
-    // --- LOGICA AI: OTTIMIZZAZIONE RISCHEDULAZIONE ---
-    const handleAIOptimize = async () => {
+    // --- LOGICA AI ---
+    const handleAIOptimize = useCallback(async (isSilent = false) => {
         const sessionStr = Cookies.get('user_session');
-        if (!sessionStr) return;
+        if (!sessionStr || aiLoading) return;
         const session = JSON.parse(sessionStr);
 
         setAiLoading(true);
@@ -108,7 +110,6 @@ export default function TeacherFeedbackPage() {
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
                     action: "getAIOptimizedSchedule",
-                    id_token: session.id_token,
                     teacherName: `${session.given_name} ${session.family_name}`.trim(),
                     schedule: fullSchedule,
                     feedbacks: feedbackList.filter(f => f.status === "Assente")
@@ -117,18 +118,41 @@ export default function TeacherFeedbackPage() {
 
             const result = await response.json();
             if (result.proposte) {
-                setAiDialog({ open: true, suggestions: result.proposte });
-            } else {
-                throw new Error("Formato risposta AI non valido");
+                localStorage.setItem('cache_ai_suggestions', JSON.stringify(result.proposte));
+
+                setAiDialog(prev => ({
+                    open: isSilent ? prev.open : true,
+                    suggestions: result.proposte
+                }));
+
+                if (isSilent) {
+                    setNotification({ open: true, message: 'Suggerimenti AI pronti!', severity: 'info' });
+                }
             }
         } catch (e) {
-            setErrorDialog({ open: true, title: 'Errore AI', message: 'Non è stato possibile generare suggerimenti automatici.' });
+            console.error("Errore analisi background:", e);
         } finally {
             setAiLoading(false);
         }
-    };
+    }, [aiLoading, fullSchedule, feedbackList]);
 
-    // --- LOGICA RISOLUZIONE MANUALE ---
+    useEffect(() => {
+        const hasCache = feedbackList.length > 0;
+        fetchData(hasCache);
+    }, [fetchData, feedbackList.length]);
+
+    useEffect(() => {
+        const absences = feedbackList.filter(f => f.status === "Assente");
+        const hasCache = aiDialog.suggestions.length > 0;
+
+        // Se ci sono assenze e NON c'è cache, avvia l'analisi
+        if (absences.length > 0 && !hasCache && !loading) {
+            handleAIOptimize(true);
+        }
+        // Aggiungiamo le dipendenze richieste
+    }, [feedbackList, aiDialog.suggestions.length, loading, handleAIOptimize]);
+
+    // --- LOGICA RISOLUZIONE ---
     const askResolveConfirmation = (item, idx) => {
         setConfirmDialog({ open: true, item, idx });
     };
@@ -166,7 +190,14 @@ export default function TeacherFeedbackPage() {
                 setFeedbackList(prev => {
                     const newList = prev.filter((_, i) => i !== prev.indexOf(item));
                     localStorage.setItem('cache_feedbacks', JSON.stringify(newList));
-                    localStorage.setItem('cache_absences', JSON.stringify(newList.filter(f => f.status === "Assente")));
+                    localStorage.setItem('cache_absences', JSON.stringify(newList.filter(f => f.status === "Assente")))
+
+                    //Pulizia cache risposte AI
+                    if (newList.length === 0) {
+                        localStorage.removeItem('cache_ai_suggestions');
+                        setAiDialog({ open: false, suggestions: [] });
+                    }
+
                     return newList;
                 });
                 setNotification({ open: true, message: 'Lezione risolta correttamente!', severity: 'success' });
@@ -180,7 +211,7 @@ export default function TeacherFeedbackPage() {
         }
     };
 
-    // --- HELPER TEMPORALI ---
+    // --- LOGICA COLLISIONI (OCCUPATO/LIBERO) ---
     const timeToMinutes = (timeStr) => {
         const [hrs, mins] = timeStr.replace('.', ':').split(':').map(Number);
         return hrs * 60 + mins;
@@ -213,12 +244,64 @@ export default function TeacherFeedbackPage() {
         return null;
     };
 
+    // --- LOGICA CONFRONTO GRAFICO AI ---
+    const getComparisonForDay = (dayName) => {
+        const dynamicSlots = getDynamicTimeSlots();
+
+        return dynamicSlots.map(ora => {
+            // 1. Troviamo l'occupante originale dal database
+            const currentSlot = fullSchedule.find(s =>
+                s.giorno === dayName && s.ora.replace(".", ":") === ora
+            );
+            const occupant = currentSlot?.students?.[0]?.nome || "Libero";
+
+            // 2. Verifichiamo se l'AI ha proposto di spostare l'occupante attuale FUORI da questo slot
+            const isLeaving = aiDialog.suggestions.some(s =>
+                s.studente === occupant &&
+                s.vecchioOrario.toLowerCase().includes(dayName.toLowerCase()) &&
+                s.vecchioOrario.includes(ora)
+            );
+
+            // 3. Verifichiamo se l'AI ha proposto di far entrare uno studente IN questo slot
+            const incoming = aiDialog.suggestions.find(s =>
+                s.nuovoOrario.toLowerCase().includes(dayName.toLowerCase()) &&
+                s.nuovoOrario.includes(ora)
+            );
+
+            // Calcoliamo il valore proposto:
+            // - Se c'è uno studente in entrata, mostriamo lui.
+            // - Se non c'è nessuno in entrata ma l'originale se ne va, lo slot diventa "Libero".
+            // - Altrimenti, resta l'occupante attuale.
+            const proposedStudent = incoming ? incoming.studente : (isLeaving ? "Libero" : occupant);
+
+            return {
+                ora,
+                current: occupant,
+                proposed: proposedStudent,
+                // Lo stato è cambiato se qualcuno entra o se l'occupante originale esce
+                isChanged: !!incoming || isLeaving
+            };
+        });
+    };
+
+    // Funzione per ottenere la lista ordinata di tutti gli orari presenti nello schedule
+    const getDynamicTimeSlots = () => {
+        if (!fullSchedule || fullSchedule.length === 0) return [];
+
+        // Estraiamo tutti gli orari, li normalizziamo (es. "." in ":") e rimuoviamo i duplicati
+        const times = fullSchedule.map(s => s.ora.replace(".", ":"));
+        const uniqueTimes = [...new Set(times)];
+
+        // Ordiniamo gli orari cronologicamente
+        return uniqueTimes.sort((a, b) => a.localeCompare(b));
+    };
+
     // --- RENDERING CARD ---
     const renderFeedbackCard = (item, idx) => {
-        const occupante = getOccupantAt(item.preferenza);
         const isAssente = item.status === "Assente";
         const resolving = isResolving === idx;
         const exiting = isResolving === `exiting-${idx}`;
+        const occupante = getOccupantAt(item.preferenza);
 
         return (
             <Collapse in={!exiting} timeout={300} unmountOnExit key={idx}>
@@ -233,7 +316,7 @@ export default function TeacherFeedbackPage() {
                             <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1.5 }}>
                                 <Box>
                                     <Typography variant="h6" fontWeight="900" sx={{ lineHeight: 1, color: '#2c3e50' }}>
-                                        {item.ora.replace(":", "") === item.ora ? `${item.ora.slice(0, 2)}:${item.ora.slice(2)}` : item.ora}
+                                        {item.ora}
                                     </Typography>
                                     <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ textTransform: 'uppercase' }}>
                                         {viewFilter === 'all' ? item.giorno : 'Slot Orario'}
@@ -246,6 +329,8 @@ export default function TeacherFeedbackPage() {
                                 </Box>
                             </Stack>
                             <Typography variant="body1" fontWeight="800" sx={{ mb: 1.5, fontSize: '1.1rem' }}>{item.studentName}</Typography>
+
+                            {/* Rilevamento Slot Occupato/Libero reinserito */}
                             {isAssente && item.preferenza && (
                                 <Paper elevation={0} sx={{ p: 1.5, mb: 1.5, borderRadius: 3, bgcolor: '#f8faff', border: '1px solid #e0e7ff' }}>
                                     <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
@@ -253,13 +338,18 @@ export default function TeacherFeedbackPage() {
                                         <Typography variant="caption" fontWeight="900" color="#3f51b5">PROPOSTA ALTERNATIVA</Typography>
                                     </Stack>
                                     <Typography variant="body2" fontWeight="800" sx={{ mb: 0.5 }}>{item.preferenza.toUpperCase()}</Typography>
-                                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.3, borderRadius: 1.5, bgcolor: occupante ? '#fffaf0' : '#f0fff4', color: occupante ? '#9c4221' : '#276749', border: '1px solid', borderColor: occupante ? '#feebc8' : '#c6f6d5' }}>
+                                    <Box sx={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.3, borderRadius: 1.5,
+                                        bgcolor: occupante ? '#fffaf0' : '#f0fff4', color: occupante ? '#9c4221' : '#276749', border: '1px solid',
+                                        borderColor: occupante ? '#feebc8' : '#c6f6d5'
+                                    }}>
                                         <Typography sx={{ fontSize: '0.65rem', fontWeight: 'bold' }}>
                                             {occupante ? `⚠️ OCCUPATO DA: ${occupante}` : "✅ SLOT LIBERO"}
                                         </Typography>
                                     </Box>
                                 </Paper>
                             )}
+
                             {item.note && (
                                 <Box sx={{ p: 1.5, mb: isAssente ? 2 : 0, bgcolor: '#f1f3f5', borderRadius: '12px 12px 12px 4px' }}>
                                     <Typography variant="body2" sx={{ color: '#495057', fontSize: '0.85rem', fontStyle: 'italic', lineHeight: 1.4 }}>"{item.note}"</Typography>
@@ -269,8 +359,8 @@ export default function TeacherFeedbackPage() {
                                 <>
                                     <Divider sx={{ my: 1.5, opacity: 0.5 }} />
                                     <Stack direction="row" justifyContent="flex-end">
-                                        <Button size="small" color="success" variant="text" onClick={() => askResolveConfirmation(item, idx)} disabled={resolving || exiting} startIcon={(resolving || exiting) ? <CircularProgress size={16} color="inherit" /> : <DoneIcon />} sx={{ fontWeight: '900', borderRadius: 2, textTransform: 'none' }}>
-                                            {(resolving || exiting) ? 'Risoluzione...' : 'Segna come risolto'}
+                                        <Button size="small" color="success" variant="text" onClick={() => askResolveConfirmation(item, idx)} disabled={resolving || exiting} startIcon={(resolving || exiting) ? <CircularProgress size={16} color="inherit" /> : <DoneIcon />} sx={{ fontWeight: '900', borderRadius: 2 }}>
+                                            {(resolving || exiting) ? 'Salvataggio...' : 'Segna come risolto'}
                                         </Button>
                                     </Stack>
                                 </>
@@ -284,27 +374,11 @@ export default function TeacherFeedbackPage() {
 
     const renderContent = () => {
         if (loading && feedbackList.length === 0) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}><CircularProgress /></Box>;
-        let displayData = [];
-        if (viewFilter !== 'all') {
-            displayData = feedbackList.filter(f => f.giorno === selectedDay).sort((a, b) => a.ora.localeCompare(b.ora));
-            return (
-                <Stack spacing={1.5}>
-                    {displayData.length > 0 ? displayData.map((item, idx) => renderFeedbackCard(item, idx)) : (
-                        <Typography variant="body2" textAlign="center" color="text.secondary" sx={{ mt: 4 }}>Nessuna risposta per {selectedDay}</Typography>
-                    )}
-                </Stack>
-            );
-        }
-        return giorniSettimana.map(giorno => {
-            const dayData = feedbackList.filter(f => f.giorno === giorno).sort((a, b) => a.ora.localeCompare(b.ora));
-            if (dayData.length === 0) return null;
-            return (
-                <Box key={giorno} sx={{ mb: 4 }}>
-                    <Typography variant="subtitle2" color="primary" fontWeight="900" sx={{ mb: 1.5, ml: 1, textTransform: 'uppercase' }}>{giorno}</Typography>
-                    <Stack spacing={1.5}>{dayData.map((item, idx) => renderFeedbackCard(item, idx))}</Stack>
-                </Box>
-            );
-        });
+        let displayData = viewFilter === 'all' ? feedbackList : feedbackList.filter(f => f.giorno === selectedDay);
+        displayData = displayData.sort((a, b) => a.ora.localeCompare(b.ora));
+
+        return displayData.length > 0 ? displayData.map((item, idx) => renderFeedbackCard(item, idx)) :
+            <Typography variant="body2" textAlign="center" color="text.secondary" sx={{ mt: 10 }}>Nessuna risposta trovata.</Typography>;
     };
 
     return (
@@ -314,23 +388,28 @@ export default function TeacherFeedbackPage() {
                     <IconButton onClick={() => navigate(-1)}><ArrowBackIcon /></IconButton>
                     <Typography variant="h5" fontWeight="900">Risposte</Typography>
                 </Stack>
-
                 <Button
                     variant="contained"
                     size="small"
                     startIcon={aiLoading ? <CircularProgress size={16} color="inherit" /> : <AiIcon />}
-                    onClick={handleAIOptimize}
-                    disabled={aiLoading || feedbackList.filter(f => f.status === "Assente").length === 0}
+                    onClick={() => aiDialog.suggestions.length > 0 ? setAiDialog({ ...aiDialog, open: true }) : handleAIOptimize()}
                     sx={{
                         borderRadius: 5,
-                        textTransform: 'none',
                         fontWeight: 'bold',
-                        background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-                        boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)'
+                        background: aiDialog.suggestions.length > 0
+                            ? 'linear-gradient(45deg, #4CAF50 30%, #81C784 90%)' // Verde se pronti
+                            : 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)'  // Blu se da fare
                     }}
                 >
-                    {aiLoading ? "Analisi..." : "Suggerimenti AI"}
+                    {aiLoading ? "Elaborazione..." : (aiDialog.suggestions.length > 0 ? "Vedi Suggerimenti" : "Analizza")}
                 </Button>
+
+                {/* Se l'analisi è pronta in background, mostriamo un badge o un'icona pulsante */}
+                {aiDialog.suggestions.length > 0 && aiLoading && (
+                    <Typography variant="caption" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                        Aggiornamento in corso...
+                    </Typography>
+                )}
             </Stack>
 
             <ToggleButtonGroup value={viewFilter} exclusive onChange={(e, val) => val && setViewFilter(val)} size="small" color="primary" sx={{ bgcolor: 'white', mb: 2, width: '100%' }}>
@@ -341,69 +420,62 @@ export default function TeacherFeedbackPage() {
             {viewFilter !== 'all' && (
                 <Paper elevation={0} sx={{ mb: 3, borderRadius: 4, border: '1px solid #e0e0e0', overflow: 'hidden' }}>
                     <Tabs value={giorniSettimana.indexOf(selectedDay)} onChange={(e, val) => setSelectedDay(giorniSettimana[val])} variant="scrollable" scrollButtons="auto" sx={{ bgcolor: 'white' }}>
-                        {giorniSettimana.map((g, i) => (
-                            <Tab key={i} label={isMobile ? g.substring(0, 3) : g} sx={{ fontWeight: 'bold', minWidth: isMobile ? 60 : 100 }} />
-                        ))}
+                        {giorniSettimana.map((g, i) => <Tab key={i} label={isMobile ? g.substring(0, 3) : g} sx={{ fontWeight: 'bold' }} />)}
                     </Tabs>
                 </Paper>
             )}
 
             <Box sx={{ mt: 2 }}>{renderContent()}</Box>
 
-            {/* DIALOG AI SUGGESTIONS */}
-            <Dialog
-                open={aiDialog.open}
-                onClose={() => setAiDialog({ ...aiDialog, open: false })}
-                fullWidth
-                maxWidth="xs"
-                PaperProps={{ sx: { borderRadius: 5, p: 1 } }}
-            >
+            {/* DIALOG AI CON CONFRONTO GRAFICO ESTESO A TUTTA LA SETTIMANA */}
+            <Dialog open={aiDialog.open} onClose={() => setAiDialog({ ...aiDialog, open: false })} fullWidth maxWidth="md" PaperProps={{ sx: { borderRadius: 5 } }}>
                 <DialogTitle sx={{ fontWeight: '900', display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <AiIcon color="primary" /> Suggerimenti AI
+                    <AiIcon color="primary" /> Piano di Rischedulazione AI
                 </DialogTitle>
                 <DialogContent>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                        Ho analizzato le assenze e trovato le seguenti soluzioni:
-                    </Typography>
-                    <List disablePadding>
+                    <Tabs value={tabDayAI} onChange={(e, v) => setTabDayAI(v)} variant="scrollable" scrollButtons="auto" sx={{ mb: 2 }}>
+                        {giorniSettimana.map((g, i) => <Tab key={i} label={g} sx={{ fontWeight: 'bold' }} />)}
+                    </Tabs>
+                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+                        <Table size="small">
+                            <TableHead><TableRow><TableCell>Ora</TableCell><TableCell>Attuale</TableCell><TableCell>Proposta AI</TableCell></TableRow></TableHead>
+                            <TableBody>
+                                {getComparisonForDay(giorniSettimana[tabDayAI]).map((row, i) => (
+                                    <TableRow key={i} sx={{ bgcolor: row.isChanged ? '#e8f5e9' : 'inherit' }}>
+                                        <TableCell sx={{ fontWeight: 'bold' }}>{row.ora}</TableCell>
+                                        <TableCell sx={{ textDecoration: row.isChanged ? 'line-through' : 'none', color: row.isChanged ? 'text.secondary' : 'inherit' }}>{row.current}</TableCell>
+                                        <TableCell sx={{ fontWeight: row.isChanged ? '900' : 'normal', color: row.isChanged ? 'success.main' : 'inherit' }}>{row.isChanged ? `→ ${row.proposed}` : row.proposed}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </TableContainer>
+                    <Box sx={{ mt: 2, p: 2, bgcolor: '#f8faff', borderRadius: 3 }}>
+                        <Typography variant="caption" fontWeight="900" color="primary" display="block" sx={{ mb: 1 }}>LOGICA DEGLI SPOSTAMENTI:</Typography>
                         {aiDialog.suggestions.map((s, i) => (
-                            <ListItem key={i} sx={{ px: 0, py: 1.5, borderBottom: i !== aiDialog.suggestions.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
-                                <ListItemIcon sx={{ minWidth: 36 }}><InfoIcon color="info" fontSize="small" /></ListItemIcon>
-                                <ListItemText
-                                    primary={<Typography fontWeight="800" variant="body2">{s.studente}</Typography>}
-                                    secondary={
-                                        <Typography variant="caption" color="text.primary">
-                                            Sposta da <b>{s.vecchioOrario}</b> a <b style={{color: '#2e7d32'}}>{s.nuovoOrario}</b>. {s.nota}
-                                        </Typography>
-                                    }
-                                />
-                            </ListItem>
+                            <Typography key={i} variant="caption" display="block">• <b>{s.studente}</b>: {s.nota}</Typography>
                         ))}
-                    </List>
+                    </Box>
                 </DialogContent>
-                <DialogActions sx={{ p: 2 }}>
-                    <Button onClick={() => setAiDialog({ ...aiDialog, open: false })} variant="contained" fullWidth sx={{ borderRadius: 3, fontWeight: 'bold' }}>
-                        Grazie!
-                    </Button>
-                </DialogActions>
+                <DialogActions sx={{ p: 2 }}><Button onClick={() => setAiDialog({ ...aiDialog, open: false })} variant="contained" fullWidth sx={{ borderRadius: 3, fontWeight: 'bold' }}>Chiudi Anteprima</Button></DialogActions>
             </Dialog>
 
-            {/* ALTRI DIALOG */}
+            {/* DIALOG DI CONFERMA */}
             <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ ...confirmDialog, open: false })} PaperProps={{ sx: { borderRadius: 5, p: 1 } }}>
                 <DialogTitle sx={{ fontWeight: '900' }}>Confermi l'azione?</DialogTitle>
-                <DialogContent><Typography variant="body2" color="text.secondary">La risposta verrà rimossa definitivamente dal database.</Typography></DialogContent>
+                <DialogContent><Typography variant="body2" color="text.secondary">La risposta di <b>{confirmDialog.item?.studentName}</b> verrà rimossa dal database.</Typography></DialogContent>
                 <DialogActions sx={{ p: 2 }}>
                     <Button onClick={() => setConfirmDialog({ ...confirmDialog, open: false })} sx={{ fontWeight: 'bold' }}>Annulla</Button>
-                    <Button onClick={handleResolveFeedback} variant="contained" color="success" sx={{ borderRadius: 3, fontWeight: 'bold', px: 3 }}>Sì, Risolto</Button>
+                    <Button onClick={handleResolveFeedback} variant="contained" color="success" sx={{ borderRadius: 3, fontWeight: 'bold' }}>Sì, Risolto</Button>
                 </DialogActions>
             </Dialog>
 
             <Snackbar open={notification.open} autoHideDuration={4000} onClose={() => setNotification({ ...notification, open: false })} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-                <Alert severity={notification.severity} variant="filled" sx={{ borderRadius: 3, width: '100%' }}>{notification.message}</Alert>
+                <Alert severity={notification.severity} variant="filled" sx={{ borderRadius: 3 }}>{notification.message}</Alert>
             </Snackbar>
 
             <Dialog open={errorDialog.open} onClose={() => setErrorDialog({ ...errorDialog, open: false })}>
-                <DialogTitle sx={{ fontWeight: '900', color: 'error.main' }}>Attenzione</DialogTitle>
+                <DialogTitle sx={{ fontWeight: '900', color: 'error.main' }}>Errore</DialogTitle>
                 <DialogContent><Typography variant="body2">{errorDialog.message}</Typography></DialogContent>
                 <DialogActions><Button onClick={() => setErrorDialog({ ...errorDialog, open: false })} sx={{ fontWeight: 'bold' }}>Chiudi</Button></DialogActions>
             </Dialog>

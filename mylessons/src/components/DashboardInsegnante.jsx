@@ -46,6 +46,8 @@ export default function DashboardInsegnante() {
         return saved ? JSON.parse(saved) : [];
     });
 
+    const [aiLoading, setAiLoading] = useState(false);
+
     // Se abbiamo già dati in cache, partiamo con loading = false per mostrarli subito
     const [loading, setLoading] = useState(subscribers.length === 0);
 
@@ -57,8 +59,41 @@ export default function DashboardInsegnante() {
         localStorage.removeItem('cache_feedbacks')
         localStorage.removeItem('cache_absences');
         localStorage.removeItem('cache_schedules');
+        localStorage.removeItem('cache_ai_suggestions');
         navigate('/login', { replace: true });
-    }, [navigate]);
+    }, [navigate])
+
+    const runAiBackgroundAnalysis = useCallback(async (absences, schedules) => {
+        // Evitiamo chiamate multiple se non ci sono assenze o se stiamo già caricando
+        if (absences.length === 0 || aiLoading) return;
+
+        setAiLoading(true);
+        try {
+            const teacherFullName = `${userData.given_name} ${userData.family_name}`;
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                mode: 'cors',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({
+                    action: "getAIOptimizedSchedule",
+                    teacherName: teacherFullName.trim(),
+                    schedule: schedules,
+                    feedbacks: absences
+                })
+            });
+
+            const result = await response.json();
+            if (result.proposte) {
+                // Salva le proposte in cache per la pagina Feedback
+                localStorage.setItem('cache_ai_suggestions', JSON.stringify(result.proposte));
+                console.log("Analisi AI di background completata con successo.");
+            }
+        } catch (error) {
+            console.error("Errore analisi AI in background:", error);
+        } finally {
+            setAiLoading(false);
+        }
+    }, [userData, aiLoading]);
 
     const fetchDashboardData = useCallback(async (isSilent = false) => {
         if (!userData?.id_token) return;
@@ -67,7 +102,6 @@ export default function DashboardInsegnante() {
         try {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
 
-            // Carichiamo tutto in parallelo: Feedback, Studenti e Agenda
             const [resFb, resSubs, resSched] = await Promise.all([
                 fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
                 fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
@@ -79,26 +113,31 @@ export default function DashboardInsegnante() {
             const resultSched = await resSched.json();
 
             // 1. Gestione Feedback & Assenze
+            let absences = [];
             if (resultFb.status === "success") {
-                const absences = resultFb.data.filter(f => f.status === "Assente");
+                absences = resultFb.data.filter(f => f.status === "Assente");
                 setPendingAbsences(absences);
-
-                // Salviamo le assenze per il badge notifiche
                 localStorage.setItem('cache_absences', JSON.stringify(absences));
-
-                // --- AGGIUNTA: Salviamo TUTTI i feedback per la pagina dedicata ---
                 localStorage.setItem('cache_feedbacks', JSON.stringify(resultFb.data));
             }
 
-            // 2. Cache Studenti (usata da Anagrafica e Bilancio)
+            // 2. Cache Studenti
             if (resultSubs.status === "success") {
                 setSubscribers(resultSubs.data);
                 localStorage.setItem('cache_subscribers', JSON.stringify(resultSubs.data));
             }
 
             // 3. Cache Agenda
+            let schedules = [];
             if (resultSched.status === "success") {
-                localStorage.setItem('cache_schedules', JSON.stringify(resultSched.data));
+                schedules = resultSched.data;
+                localStorage.setItem('cache_schedules', JSON.stringify(schedules));
+            }
+
+            // --- INNESCO AI IN BACKGROUND ---
+            // Avviamo l'analisi solo se ci sono assenze da gestire
+            if (absences.length > 0 && schedules.length > 0) {
+                runAiBackgroundAnalysis(absences, schedules);
             }
 
         } catch (error) {
@@ -106,7 +145,7 @@ export default function DashboardInsegnante() {
         } finally {
             setLoading(false);
         }
-    }, [userData]);
+    }, [userData, runAiBackgroundAnalysis]);
 
     useEffect(() => {
         if (!userData) {
