@@ -18,7 +18,7 @@ import {
     AddCircleOutline as AddCircleOutlineIcon,
 } from '@mui/icons-material';
 import FeedbackIcon from '@mui/icons-material/Feedback';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import Cookies from 'js-cookie';
 import {APPS_SCRIPT_URL} from "./config/config";
 
@@ -64,6 +64,7 @@ const applyCascade = (slots) => {
 
 export default function SchedulePage() {
     const navigate = useNavigate();
+    const location = useLocation();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -80,10 +81,16 @@ export default function SchedulePage() {
     const [loading, setLoading] = useState(localSchedules.length === 0);
 
     const [viewMode, setViewMode] = useState('giorno');
-    const [filterDay, setFilterDay] = useState(
-        new Date().toLocaleDateString('it-IT', { weekday: 'long' }).charAt(0).toUpperCase() +
-        new Date().toLocaleDateString('it-IT', { weekday: 'long' }).slice(1)
-    );
+    const [filterDay, setFilterDay] = useState(() => {
+        // Se arriviamo dalla pagina feedback, leggiamo il giorno dallo state
+        if (location.state?.initialDay) {
+            return location.state.initialDay;
+        }
+
+        // Altrimenti, default sul giorno odierno
+        return new Date().toLocaleDateString('it-IT', { weekday: 'long' }).charAt(0).toUpperCase() +
+            new Date().toLocaleDateString('it-IT', { weekday: 'long' }).slice(1);
+    });
 
     const [editingSlot, setEditingSlot] = useState(null);
     const [openConfirmClearDay, setOpenConfirmClearDay] = useState(false);
@@ -381,6 +388,24 @@ export default function SchedulePage() {
         } catch (e) { alert("Errore reset."); } finally { setSaving(false); }
     };
 
+    const getStatusBorderColor = (giorno, ora, emailStudenteInAgenda) => {
+        if (!emailStudenteInAgenda) return 'transparent';
+
+        const savedFeedbacks = JSON.parse(localStorage.getItem('cache_feedbacks') || "[]");
+
+        // Normalizziamo l'ora per gestire i formati HH:mm o HHmm
+        const normalizeTime = (t) => t.toString().replace(/[:.]/g, '');
+
+        const feedback = savedFeedbacks.find(f =>
+            f.giorno === giorno &&
+            normalizeTime(f.ora) === normalizeTime(ora) &&
+            f.studentEmail?.toLowerCase().trim() === emailStudenteInAgenda.toLowerCase().trim()
+        );
+
+        if (!feedback) return 'rgba(0,0,0,0.1)';
+        return feedback.status === "Assente" ? '#f44336' : '#4caf50';
+    };
+
     return (
         <Box sx={{ p: isMobile ? 1.5 : 3, pb: isMobile ? 22 : 12, maxWidth: 650, mx: 'auto', bgcolor: '#f8f9fa', minHeight: '100vh' }}>
             {/* BARRA DI PROGRESSO ATTECCATA IN ALTO */}
@@ -574,16 +599,31 @@ export default function SchedulePage() {
                                                                     '&::-webkit-scrollbar': { display: 'none' } // Nasconde scrollbar
                                                                 }}>
                                                                     {hasStudents ? (
-                                                                        slot.students.map((s, idx) => (
-                                                                            <Chip
-                                                                                key={idx}
-                                                                                label={s.nome.split(' ')[0]} // Solo nome per risparmiare spazio
-                                                                                size="small"
-                                                                                sx={{ bgcolor: getStudentColor(s.email), color: 'white', fontWeight: 'bold', flexShrink: 0 }}
-                                                                            />
-                                                                        ))
+                                                                        slot.students.map((s, idx) => {
+                                                                            const statusColor = getStatusBorderColor(slot.giorno, slot.ora, s.email);
+
+                                                                            return (
+                                                                                <Tooltip key={idx} title={statusColor === '#f44336' ? "Assente" : statusColor === '#4caf50' ? "Confermato" : "In attesa"}>
+                                                                                    <Box sx={{
+                                                                                        display: 'inline-flex',
+                                                                                        p: '1.5px',
+                                                                                        borderRadius: '16px',
+                                                                                        border: '2.5px solid',
+                                                                                        borderColor: statusColor,
+                                                                                        mr: 0.5,
+                                                                                        transition: 'all 0.3s ease'
+                                                                                    }}>
+                                                                                        <Chip
+                                                                                            label={s.nome.split(' ')[0]}
+                                                                                            size="small"
+                                                                                            sx={{ bgcolor: getStudentColor(s.email), color: 'white', fontWeight: 'bold', height: 20 }}
+                                                                                        />
+                                                                                    </Box>
+                                                                                </Tooltip>
+                                                                            );
+                                                                        })
                                                                     ) : (
-                                                                        <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Disponibile</Typography>
+                                                                        <Typography variant="caption" color="text.disabled" sx={{ fontStyle: 'italic' }}>Libero</Typography>
                                                                     )}
                                                                 </Box>
 

@@ -249,10 +249,11 @@ export default function TeacherFeedbackPage() {
         const dynamicSlots = getDynamicTimeSlots();
 
         return dynamicSlots.map(ora => {
-            // 1. Troviamo l'occupante originale dal database
-            const currentSlot = fullSchedule.find(s =>
-                s.giorno === dayName && s.ora.replace(".", ":") === ora
-            );
+            const currentSlot = fullSchedule.find(s => {
+                let oraSlot = s.ora.toString().replace(".", ":");
+                if (/^\d{4}$/.test(oraSlot)) oraSlot = oraSlot.slice(0, 2) + ":" + oraSlot.slice(2);
+                return s.giorno === dayName && oraSlot === ora;
+            });
             const occupant = currentSlot?.students?.[0]?.nome || "Libero";
 
             // 2. Verifichiamo se l'AI ha proposto di spostare l'occupante attuale FUORI da questo slot
@@ -285,14 +286,26 @@ export default function TeacherFeedbackPage() {
     };
 
     // Funzione per ottenere la lista ordinata di tutti gli orari presenti nello schedule
+    // Funzione aggiornata per ottenere e formattare gli orari dallo schedule
     const getDynamicTimeSlots = () => {
         if (!fullSchedule || fullSchedule.length === 0) return [];
 
-        // Estraiamo tutti gli orari, li normalizziamo (es. "." in ":") e rimuoviamo i duplicati
-        const times = fullSchedule.map(s => s.ora.replace(".", ":"));
-        const uniqueTimes = [...new Set(times)];
+        const times = fullSchedule.map(s => {
+            let oraRaw = s.ora.toString().trim();
 
-        // Ordiniamo gli orari cronologicamente
+            // 1. Sostituisce eventuali punti con due punti (es. 17.00 -> 17:00)
+            oraRaw = oraRaw.replace(".", ":");
+
+            // 2. Se l'orario è nel formato "1700" (4 cifre senza separatore), inserisce i due punti
+            if (/^\d{4}$/.test(oraRaw)) {
+                oraRaw = oraRaw.slice(0, 2) + ":" + oraRaw.slice(2);
+            }
+
+            return oraRaw;
+        });
+
+        // Rimuove i duplicati e ordina cronologicamente
+        const uniqueTimes = [...new Set(times)];
         return uniqueTimes.sort((a, b) => a.localeCompare(b));
     };
 
@@ -316,7 +329,9 @@ export default function TeacherFeedbackPage() {
                             <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1.5 }}>
                                 <Box>
                                     <Typography variant="h6" fontWeight="900" sx={{ lineHeight: 1, color: '#2c3e50' }}>
-                                        {item.ora}
+                                        {item.ora.includes(":") || item.ora.includes(".")
+                                            ? item.ora.replace(".", ":")
+                                            : (item.ora.length === 4 ? `${item.ora.slice(0, 2)}:${item.ora.slice(2)}` : item.ora)}
                                     </Typography>
                                     <Typography variant="caption" fontWeight="bold" color="text.secondary" sx={{ textTransform: 'uppercase' }}>
                                         {viewFilter === 'all' ? item.giorno : 'Slot Orario'}
@@ -358,8 +373,35 @@ export default function TeacherFeedbackPage() {
                             {isAssente && (
                                 <>
                                     <Divider sx={{ my: 1.5, opacity: 0.5 }} />
-                                    <Stack direction="row" justifyContent="flex-end">
-                                        <Button size="small" color="success" variant="text" onClick={() => askResolveConfirmation(item, idx)} disabled={resolving || exiting} startIcon={(resolving || exiting) ? <CircularProgress size={16} color="inherit" /> : <DoneIcon />} sx={{ fontWeight: '900', borderRadius: 2 }}>
+                                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+
+                                        {/* NUOVO COLLEGAMENTO ALL'AGENDA */}
+                                        <Button
+                                            size="small"
+                                            variant="text"
+                                            color="primary"
+                                            // Passiamo il giorno (es. "Lunedì") nello stato della navigazione
+                                            onClick={() => navigate('/dashboard/schedule', { state: { initialDay: item.giorno } })}
+                                            sx={{
+                                                fontWeight: 'bold',
+                                                textTransform: 'none',
+                                                borderRadius: 2
+                                            }}
+                                            startIcon={<CalendarIcon sx={{ fontSize: 16 }} />}
+                                        >
+                                            Vedi in Agenda
+                                        </Button>
+
+                                        {/* Pulsante Risolto (già esistente) */}
+                                        <Button
+                                            size="small"
+                                            color="success"
+                                            variant="text"
+                                            onClick={() => askResolveConfirmation(item, idx)}
+                                            disabled={resolving || exiting}
+                                            startIcon={(resolving || exiting) ? <CircularProgress size={16} color="inherit" /> : <DoneIcon />}
+                                            sx={{ fontWeight: '900', borderRadius: 2 }}
+                                        >
                                             {(resolving || exiting) ? 'Salvataggio...' : 'Segna come risolto'}
                                         </Button>
                                     </Stack>
