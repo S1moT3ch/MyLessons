@@ -170,7 +170,7 @@ export default function SchedulePage() {
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [fetchData, hasChanges]);
+    }, [fetchData, hasChanges, saving]);
 
     const saveFullDay = async () => {
         if (saving) return;
@@ -264,6 +264,7 @@ export default function SchedulePage() {
         ];
 
         setLocalSchedules(finalSchedules);
+        localStorage.setItem('cache_schedules', JSON.stringify(finalSchedules)); // AGGIORNA LA CACHE
         setHasChanges(true);
 
     };
