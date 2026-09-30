@@ -20,21 +20,15 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
 
 export default function StudentsManagementPage() {
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-    // --- LOGICA DI CACHE ---
-    // Inizializziamo con i dati pre-caricati dalla Dashboard/Login
-    const [studentsData, setStudentsData] = useState(() => {
-        const saved = localStorage.getItem('cache_subscribers');
-        return saved ? JSON.parse(saved) : [];
-    });
-
-    // Se abbiamo dati in cache, non mostriamo lo spinner all'inizio
+    // --- LOGICA DI CACHE: Recupero istantaneo ---
+    const [studentsData, setStudentsData] = useState(() => getCache('cache_subscribers', []));
     const [loading, setLoading] = useState(studentsData.length === 0);
     const [searchTerm, setSearchTerm] = useState('');
 
@@ -49,30 +43,40 @@ export default function StudentsManagementPage() {
 
     const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
-    const fetchData = useCallback(async (isSilent = false) => {
+    const fetchData = useCallback(async (forceRefresh = false) => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return navigate('/login');
         const session = JSON.parse(sessionStr);
 
-        if (!isSilent) setLoading(true);
+        if (!forceRefresh && isCacheValid('cache_subscribers')) {
+            setLoading(false);
+            return;
+        }
+
+        if (studentsData.length === 0) setLoading(true);
         try {
             const response = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
-            const result = await response.json();
-            if (result.status === "success") {
-                setStudentsData(result.data);
-                // Aggiorniamo la cache con i dati freschi
-                localStorage.setItem('cache_subscribers', JSON.stringify(result.data));
+            if (response.ok) {
+                const text = await response.text();
+                if (text.startsWith("{") || text.startsWith("[")) {
+                    const result = JSON.parse(text);
+                    if (result.status === "success") {
+                        setStudentsData(result.data);
+                        setCache('cache_subscribers', result.data);
+                    }
+                }
             }
         } catch (error) {
-            console.error(error);
-        } finally { setLoading(false); }
-    }, [navigate]);
+            console.warn("Errore fetch studenti:", error);
+        } finally {
+            setLoading(false);
+        }
+    }, [navigate, studentsData.length]);
 
     useEffect(() => {
-        // Caricamento silenzioso se abbiamo già la cache
-        const hasCache = studentsData.length > 0;
-        fetchData(hasCache);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (!isCacheValid('cache_subscribers')) {
+            fetchData(true);
+        }
     }, [fetchData]);
 
     const handleOpenMenu = (event, student) => {
@@ -117,7 +121,7 @@ export default function StudentsManagementPage() {
                 const updatedData = studentsData.map(s => s.studentEmail === payDialog.student.studentEmail ? { ...s, lezioniDaPagare: newDebtValue } : s);
                 setStudentsData(updatedData);
                 // Aggiorniamo la cache locale subito dopo la modifica
-                localStorage.setItem('cache_subscribers', JSON.stringify(updatedData));
+                setCache('cache_subscribers', updatedData);
 
                 setPayDialog({ open: false, student: null, amountPaid: 1 });
                 setSnackbar({ open: true, message: 'Pagamento registrato!', severity: 'success' });
@@ -152,7 +156,7 @@ export default function StudentsManagementPage() {
                 const updatedData = studentsData.map(s => s.studentEmail === rateDialog.student.studentEmail ? { ...s, tariffa: rateDialog.rate } : s);
                 setStudentsData(updatedData);
                 // Aggiorniamo la cache locale
-                localStorage.setItem('cache_subscribers', JSON.stringify(updatedData));
+                setCache('cache_subscribers', updatedData);
 
                 setRateDialog({ open: false, student: null, rate: 0 });
                 setSnackbar({ open: true, message: 'Tariffa aggiornata!', severity: 'success' });

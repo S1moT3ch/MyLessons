@@ -16,30 +16,29 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
 
 export default function FinancialDashboard() {
     const navigate = useNavigate();
 
     // --- LOGICA DI CACHE: Recupero immediato ---
-    const [studentsData, setStudentsData] = useState(() => {
-        const saved = localStorage.getItem('cache_subscribers');
-        return saved ? JSON.parse(saved) : [];
-    });
-
-    // Se abbiamo dati in cache, non mostriamo lo spinner (loading = false)
-    const [loading, setLoading] = useState(studentsData.length === 0);
+    const [studentsData, setStudentsData] = useState(() => getCache('cache_subscribers', []));
+    const [loading, setLoading] = useState(!isCacheValid('cache_subscribers') && studentsData.length === 0);
 
     const [showGlobalPrivacy, setShowGlobalPrivacy] = useState(false);
     const [visibleStudentEmail, setVisibleStudentEmail] = useState(null);
 
-    const fetchData = useCallback(async (isSilent = false) => {
+    const fetchData = useCallback(async (forceRefresh = false) => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return navigate('/login');
         const session = JSON.parse(sessionStr);
 
-        // Se è "silent", non attiviamo lo spinner principale
-        if (!isSilent) setLoading(true);
+        if (!forceRefresh && isCacheValid('cache_subscribers')) {
+            setLoading(false);
+            return;
+        }
+
+        if (studentsData.length === 0) setLoading(true);
 
         try {
             const response = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
@@ -47,22 +46,19 @@ export default function FinancialDashboard() {
 
             if (result.status === "success") {
                 setStudentsData(result.data);
-                // Aggiorniamo la cache globale usata anche da Anagrafica Studenti
-                localStorage.setItem('cache_subscribers', JSON.stringify(result.data));
+                setCache('cache_subscribers', result.data);
             }
         } catch (error) {
             console.error(error);
         } finally {
             setLoading(false);
         }
-    }, [navigate]);
+    }, [navigate, studentsData.length]);
 
     useEffect(() => {
-        // Se abbiamo già dati (dalla dashboard o login), carichiamo in background
-        const hasCache = studentsData && studentsData.length > 0;
-        fetchData(hasCache);
-
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (!isCacheValid('cache_subscribers')) {
+            fetchData(true);
+        }
     }, [fetchData]);
 
     const stats = useMemo(() => {

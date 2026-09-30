@@ -20,7 +20,7 @@ import {
 import FeedbackIcon from '@mui/icons-material/Feedback';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import {APPS_SCRIPT_URL} from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
 
 // --- HELPERS ---
 
@@ -73,21 +73,15 @@ export default function SchedulePage() {
     const [pendingChanges, setPendingChanges] = useState(false);
     const [hadChangesBeforeEditing, setHadChangesBeforeEditing] = useState(false);
 
-    const [localSchedules, setLocalSchedules] = useState(() => {
-        const saved = localStorage.getItem('cache_schedules');
-        return saved ? JSON.parse(saved) : [];
-    });
-    const [subscribers, setSubscribers] = useState([]);
+    const [localSchedules, setLocalSchedules] = useState(() => getCache('cache_schedules', []));
+    const [subscribers, setSubscribers] = useState(() => getCache('cache_subscribers', []));
     const [loading, setLoading] = useState(localSchedules.length === 0);
 
     const [viewMode, setViewMode] = useState('giorno');
     const [filterDay, setFilterDay] = useState(() => {
-        // Se arriviamo dalla pagina feedback, leggiamo il giorno dallo state
         if (location.state?.initialDay) {
             return location.state.initialDay;
         }
-
-        // Altrimenti, default sul giorno odierno
         return new Date().toLocaleDateString('it-IT', { weekday: 'long' }).charAt(0).toUpperCase() +
             new Date().toLocaleDateString('it-IT', { weekday: 'long' }).slice(1);
     });
@@ -106,71 +100,64 @@ export default function SchedulePage() {
         try { return JSON.parse(sessionStr); } catch (e) { return null; }
     }, []);
 
-    const fetchData = useCallback(async (isSilent = false) => {
+    const fetchData = useCallback(async (forceRefresh = false) => {
         const session = getAuthData();
         if (!session?.id_token) return navigate('/login');
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
-        if (!isSilent) setLoading(true);
+        if (!forceRefresh && isCacheValid('cache_schedules')) {
+            setLoading(false);
+            return;
+        }
+
+        if (localSchedules.length === 0) setLoading(true);
 
         try {
-            const [resSched, resSubs] = await Promise.all([
-                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`),
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`)
-            ]);
-
-            const dataSched = await resSched.json();
-            const dataSubs = await resSubs.json();
-
-            if (dataSched.status === "success") {
-                setLocalSchedules(dataSched.data);
-                // --- AGGIUNGI QUESTA RIGA ---
-                localStorage.setItem('cache_schedules', JSON.stringify(dataSched.data));
-                // ----------------------------
+            // 1. Carica l'agenda in modo prioritario
+            const resSched = await fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`);
+            if (resSched.ok) {
+                const text = await resSched.text();
+                if (text.startsWith("{") || text.startsWith("[")) {
+                    const dataSched = JSON.parse(text);
+                    if (dataSched.status === "success") {
+                        setLocalSchedules(dataSched.data);
+                        setCache('cache_schedules', dataSched.data);
+                    }
+                }
             }
-
-            if (dataSubs.status === "success") {
-                setSubscribers(dataSubs.data);
-                // Opzionale: puoi salvare anche questi se vuoi la lista studenti istantanea in modifica
-                localStorage.setItem('cache_subscribers', JSON.stringify(dataSubs.data));
-            }
-
-            setHasChanges(false);
         } catch (error) {
-            console.error("Errore recupero dati:", error);
+            console.warn("Errore orari:", error);
         } finally {
-            if (!isSilent) setLoading(false);
+            setLoading(false);
         }
-    }, [getAuthData, navigate]);
 
-    useEffect(() => {
-        // 1. Se l'utente sta modificando (editingSlot non è null),
-        // BLOCCA assolutamente ogni fetch dal server.
-        if (editingSlot !== null) return;
-
-        // 2. Se ci sono cambiamenti pendenti non salvati, non caricare.
-        if (hasChanges) return;
-
-        const hasCache = localSchedules && localSchedules.length > 0;
-
-        // Solo se non stiamo editando e non abbiamo modifiche, sincronizziamo.
-        fetchData(hasCache);
-
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [fetchData, hasChanges, editingSlot]);
-
-    useEffect(() => {
-        const handleVisibilityChange = () => {
-            // Ricarica solo se la pagina è visibile E NON ci sono modifiche non salvate
-            if (document.visibilityState === 'visible' && !hasChanges) {
-                console.log("Bentornato! Sincronizzazione silenziosa...");
-                fetchData(true);
+        // 2. Carica iscritti solo se necessario (usato solo per il menu a tendina)
+        if (!isCacheValid('cache_subscribers')) {
+            try {
+                const resSubs = await fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${session.sub}&token=${session.id_token}`);
+                if (resSubs.ok) {
+                    const text = await resSubs.text();
+                    if (text.startsWith("{") || text.startsWith("[")) {
+                        const dataSubs = JSON.parse(text);
+                        if (dataSubs.status === "success") {
+                            setSubscribers(dataSubs.data);
+                            setCache('cache_subscribers', dataSubs.data);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("Errore iscritti in background:", e);
             }
-        };
+        }
+        setHasChanges(false);
+    }, [getAuthData, navigate, localSchedules.length]);
 
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, [fetchData, hasChanges, saving]);
+    useEffect(() => {
+        if (editingSlot !== null || hasChanges) return;
+        if (!isCacheValid('cache_schedules')) {
+            fetchData(true);
+        }
+    }, [fetchData, hasChanges, editingSlot]);
 
     const saveFullDay = async () => {
         if (saving) return;
@@ -203,7 +190,7 @@ export default function SchedulePage() {
 
             if (resultText.includes("Success")) {
                 // Se l'invio ha successo, sincronizziamo i dati dal server
-                await fetchData(true);
+                setCache('cache_schedules', localSchedules);
 
                 // IMPORTANTE: Resettiamo hasChanges solo se nel frattempo
                 // l'utente non ha aperto altri slot (pendingChanges è false)
@@ -264,7 +251,7 @@ export default function SchedulePage() {
         ];
 
         setLocalSchedules(finalSchedules);
-        localStorage.setItem('cache_schedules', JSON.stringify(finalSchedules)); // AGGIORNA LA CACHE
+        setCache('cache_schedules', finalSchedules); // AGGIORNA LA CACHE
         setHasChanges(true);
 
     };

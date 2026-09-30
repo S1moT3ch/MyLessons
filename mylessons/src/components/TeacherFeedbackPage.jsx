@@ -15,25 +15,19 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
 
 export default function TeacherFeedbackPage() {
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
-    // --- STATI DATI E CACHE ---
-    const [feedbackList, setFeedbackList] = useState(() => {
-        const saved = localStorage.getItem('cache_feedbacks');
-        return saved ? JSON.parse(saved) : [];
-    });
-    const [fullSchedule, setFullSchedule] = useState(() => {
-        const saved = localStorage.getItem('cache_schedules');
-        return saved ? JSON.parse(saved) : [];
-    });
+    // --- STATI DATI E CACHE: Recupero istantaneo ---
+    const [feedbackList, setFeedbackList] = useState(() => getCache('cache_feedbacks', []));
+    const [fullSchedule, setFullSchedule] = useState(() => getCache('cache_schedules', []));
 
     // --- STATI UI ---
-    const [loading, setLoading] = useState(feedbackList.length === 0);
+    const [loading, setLoading] = useState(!isCacheValid('cache_feedbacks') && feedbackList.length === 0);
     const [isResolving, setIsResolving] = useState(null);
     const [aiLoading, setAiLoading] = useState(false);
     const [tabDayAI, setTabDayAI] = useState(0);
@@ -42,12 +36,12 @@ export default function TeacherFeedbackPage() {
     const [confirmDialog, setConfirmDialog] = useState({ open: false, item: null, idx: null });
     const [notification, setNotification] = useState({ open: false, message: '', severity: 'success' });
     const [errorDialog, setErrorDialog] = useState({ open: false, title: '', message: '' });
-    // Stato per i suggerimenti AI con recupero da cache
+    
     const [aiDialog, setAiDialog] = useState(() => {
-        const savedAi = localStorage.getItem('cache_ai_suggestions');
+        const savedAi = getCache('cache_ai_suggestions', null);
         return {
             open: false,
-            suggestions: savedAi ? JSON.parse(savedAi) : []
+            suggestions: savedAi || []
         };
     });
 
@@ -61,13 +55,18 @@ export default function TeacherFeedbackPage() {
     const giorniSettimana = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 
     // --- FETCH DATI ---
-    const fetchData = useCallback(async (isSilent = false) => {
+    const fetchData = useCallback(async (forceRefresh = false) => {
         const sessionStr = Cookies.get('user_session');
         if (!sessionStr) return navigate('/login');
         const session = JSON.parse(sessionStr);
         const teacherFullName = `${session.given_name} ${session.family_name}`;
 
-        if (!isSilent) setLoading(true);
+        if (!forceRefresh && isCacheValid('cache_feedbacks') && isCacheValid('cache_schedules')) {
+            setLoading(false);
+            return;
+        }
+
+        if (feedbackList.length === 0) setLoading(true);
 
         try {
             const [resFb, resSched] = await Promise.all([
@@ -80,21 +79,21 @@ export default function TeacherFeedbackPage() {
 
             if (resultFb.status === "success") {
                 setFeedbackList(resultFb.data);
-                localStorage.setItem('cache_feedbacks', JSON.stringify(resultFb.data));
+                setCache('cache_feedbacks', resultFb.data);
                 const absences = resultFb.data.filter(f => f.status === "Assente");
-                localStorage.setItem('cache_absences', JSON.stringify(absences));
+                setCache('cache_absences', absences);
             }
 
             if (resultSched.status === "success") {
                 setFullSchedule(resultSched.data);
-                localStorage.setItem('cache_schedules', JSON.stringify(resultSched.data));
+                setCache('cache_schedules', resultSched.data);
             }
         } catch (e) {
             console.error("Errore fetch feedback:", e);
         } finally {
             setLoading(false);
         }
-    }, [navigate]);
+    }, [navigate, feedbackList.length]);
 
     // --- LOGICA AI ---
     const handleAIOptimize = useCallback(async (isSilent = false) => {
@@ -118,7 +117,7 @@ export default function TeacherFeedbackPage() {
 
             const result = await response.json();
             if (result.proposte) {
-                localStorage.setItem('cache_ai_suggestions', JSON.stringify(result.proposte));
+                setCache('cache_ai_suggestions', result.proposte);
 
                 setAiDialog(prev => ({
                     open: isSilent ? prev.open : true,
@@ -137,9 +136,10 @@ export default function TeacherFeedbackPage() {
     }, [aiLoading, fullSchedule, feedbackList]);
 
     useEffect(() => {
-        const hasCache = feedbackList.length > 0;
-        fetchData(hasCache);
-    }, [fetchData, feedbackList.length]);
+        if (!isCacheValid('cache_feedbacks')) {
+            fetchData(true);
+        }
+    }, [fetchData]);
 
     useEffect(() => {
         const absences = feedbackList.filter(f => f.status === "Assente");

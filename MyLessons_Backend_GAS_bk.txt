@@ -228,35 +228,39 @@ function handleStudentFeedback(requestData) {
 }
 
 function handleGetTeacherFeedbackSummary(teacherName) {
-  const ssMain = SpreadsheetApp.getActiveSpreadsheet(); // o la tua funzione getMainSS()
+  const ssMain = SpreadsheetApp.getActiveSpreadsheet();
   const feedbackSheet = ssMain.getSheetByName("Feedback");
   const studentiSheet = ssMain.getSheetByName("Studenti");
   
   if (!feedbackSheet) return createJsonResponse({ status: "success", data: [] });
   
-  // 1. Creiamo mappe per ID e per Email
   const idToNameMap = {};
-  const emailToNameMap = {};
+  const idToEmailMap = {};
   
   if (studentiSheet) {
     const studentiData = studentiSheet.getDataRange().getValues();
+    // Colonna A: ID, Colonna B: Email, Colonna C: Nome, Colonna D: Cognome
     for (let i = 1; i < studentiData.length; i++) {
-      const idGoogle = studentiData[i][0] ? studentiData[i][0].toString().trim() : ""; // Colonna A
-      const email = studentiData[i][1] ? studentiData[i][1].toString().toLowerCase().trim() : ""; // Colonna B
-      const nome = studentiData[i][2] ? studentiData[i][2].toString().trim() : "";      // Colonna C
-      const cognome = studentiData[i][3] ? studentiData[i][3].toString().trim() : "";   // Colonna D
+      const idGoogle = studentiData[i][0] ? studentiData[i][0].toString().trim() : "";
+      const email = studentiData[i][1] ? studentiData[i][1].toString().toLowerCase().trim() : "";
+      const nomeCompleto = `${studentiData[i][2]} ${studentiData[i][3]}`.trim();
       
-      const nomeCompleto = `${nome} ${cognome}`.trim();
-      
-      if (idGoogle) idToNameMap[idGoogle] = nomeCompleto;
-      if (email) emailToNameMap[email] = nomeCompleto;
+      if (idGoogle) {
+        idToNameMap[idGoogle] = nomeCompleto;
+        idToEmailMap[idGoogle] = email; // Mappiamo l'ID all'email della colonna B
+      }
+      // Se l'identificatore nel feedback fosse già l'email, la mappiamo comunque per sicurezza
+      if (email) {
+        idToNameMap[email] = nomeCompleto;
+        idToEmailMap[email] = email;
+      }
     }
   }
 
   const fbData = feedbackSheet.getDataRange().getValues();
   const teacherNameClean = teacherName.toLowerCase().trim();
-
   const result = [];
+
   for (let i = 1; i < fbData.length; i++) {
     const key = fbData[i][0].toString();
     
@@ -264,21 +268,18 @@ function handleGetTeacherFeedbackSummary(teacherName) {
       const parts = key.split("-");
       const identifier = parts[parts.length - 1].trim().toLowerCase();
       
-      const trovato = idToNameMap[identifier] || emailToNameMap[identifier];
-      
       result.push({
-        studentName: trovato || identifier,
+        studentName: idToNameMap[identifier] || identifier,
+        studentEmail: idToEmailMap[identifier] || (identifier.includes("@") ? identifier : ""),
         giorno: parts[1] || "",
         ora: parts[2] || "",
         status: fbData[i][1] || "",
         note: fbData[i][2] || "",
-        preferenza: fbData[i][3] || "", // <--- LEGGI LA COLONNA D
-        timestamp: fbData[i][4] || ""    // <--- IL TIMESTAMP SCALA ALLA COLONNA E (indice 4)
+        preferenza: fbData[i][3] || "",
+        timestamp: fbData[i][4] || ""
       });
     }
   }
-  
-  result.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   return createJsonResponse({ status: "success", data: result });
 }
 
@@ -301,6 +302,52 @@ function getTeacherSheet(ss, teacherName) {
   return sheet;
 }
 
+function resolveStudentFeedback(data) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const feedbackSheet = ss.getSheetByName("Feedback");
+  const studentiSheet = ss.getSheetByName("Studenti"); // Utilizziamo il foglio Studenti
+  
+  if (!feedbackSheet || !studentiSheet) {
+    return ContentService.createTextOutput("Error: Fogli non trovati");
+  }
+
+  let studentEmail = "";
+  const studentiData = studentiSheet.getDataRange().getValues();
+
+  // 1. LOOKUP DELL'EMAIL NEL FOGLIO STUDENTI
+  // Il frontend invia data.studentName (es. "Digital Creation")
+  for (let j = 1; j < studentiData.length; j++) {
+    const nomeFoglio = studentiData[j][2].toString().trim();    // Colonna C
+    const cognomeFoglio = studentiData[j][3].toString().trim(); // Colonna D
+    const nomeCompletoFoglio = (nomeFoglio + " " + cognomeFoglio).trim();
+
+    if (nomeCompletoFoglio.toLowerCase() === data.studentName.trim().toLowerCase()) {
+      studentEmail = studentiData[j][1].toString().trim(); // Recupera Email dalla Colonna B
+      break;
+    }
+  }
+
+  if (!studentEmail) {
+    return ContentService.createTextOutput("Error: Email non trovata per " + data.studentName);
+  }
+
+  // 2. COSTRUZIONE KEYID E CANCELLAZIONE
+  // Formato KeyID: Insegnante-Giorno-Ora-Email
+  const oraClean = data.ora.replace(":", "").trim();
+  const searchKey = data.teacherName.trim() + "-" + data.giorno.trim() + "-" + oraClean + "-" + studentEmail;
+
+  const feedbackData = feedbackSheet.getDataRange().getValues();
+  for (let i = 1; i < feedbackData.length; i++) {
+    // Confronto con la Colonna A del foglio Feedback
+    if (feedbackData[i][0].toString().trim() === searchKey) {
+      feedbackSheet.deleteRow(i + 1);
+      return ContentService.createTextOutput("Success");
+    }
+  }
+
+  return ContentService.createTextOutput("Not Found: " + searchKey);
+}
+
 function clearWeeklyFeedbacks() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheetFeedback = ss.getSheetByName("Feedback"); // Assicurati che il nome sia corretto
@@ -318,6 +365,84 @@ function clearWeeklyFeedbacks() {
       // Opzionale: Aggiorna la proprietà di sistema per forzare il refresh nel frontend
       PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
     }
+  }
+}
+
+function getAIOptimizedSchedule(data) {
+  const apiKey = "AIzaSyBwdlidfRS1lPRnqjuEm4OVABA9NlSjG-s";
+  
+  // URL corretto seguendo l'esempio ufficiale:
+  // v1beta/models/gemini-flash-latest:generateContent
+  const apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=" + apiKey;
+
+  const prompt = `
+    Sei un esperto di logistica. Analizza i dati e proponi soluzioni di rischedulazione.
+    
+    ORARIO ATTUALE:
+    ${JSON.stringify(data.schedule)}
+    
+    RICHIESTE ASSENTI:
+    ${JSON.stringify(data.feedbacks)}
+    
+    COMPITO:
+    1. Se la preferenza dello studente è libera nell'orario attuale, proponi lo spostamento.
+    2. Se la preferenza è occupata da un altro studente che è presente nella lista degli assenti, proponi lo scambio (swap), oppure, se il secondo studente da spostare per far spazio alla preferena del primo studente ha segnato un'assenza, considera anche di rischedulare tale assenza
+    3. È importante che ogni studente, dopo la rischedulazione, abbia sempre lo stesso numero di ore che aveva nell'orario originale.
+    
+    RESTITUISCI SOLO UN JSON VALIDO:
+    {
+      "proposte": [
+        { "studente": "Nome", "vecchioOrario": "Ora", "nuovoOrario": "Ora", "nota": "Motivazione" }
+      ]
+    }
+  `;
+
+  const payload = {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": prompt
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "response_mime_type": "application/json"
+    }
+  };
+
+  const options = {
+    "method": "post",
+    "contentType": "application/json",
+    "payload": JSON.stringify(payload),
+    "muteHttpExceptions": true 
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(apiUrl, options);
+    const responseText = response.getContentText();
+    const jsonResponse = JSON.parse(responseText);
+
+    // Controllo se l'API ha restituito un errore nel corpo del JSON
+    if (jsonResponse.error) {
+      return ContentService.createTextOutput(JSON.stringify({ 
+        error: "Errore API Google", 
+        message: jsonResponse.error.message 
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Estrazione del testo generato
+    const aiResponseRaw = jsonResponse.candidates[0].content.parts[0].text;
+    
+    return ContentService.createTextOutput(aiResponseRaw)
+                         .setMimeType(ContentService.MimeType.JSON);
+                         
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ 
+      error: "Errore Script", 
+      details: err.toString() 
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -659,104 +784,119 @@ function doPost(e) {
 
     if (action === "saveFullSchedule") {
       if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
-      
-      const ssSchedule = getScheduleSS();
-      const teacherName = requestData.teacherName;
-      const sheet = getTeacherSheet(ssSchedule, teacherName);
-      const ssMain = getMainSS();
-      const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
-      const allSchedules = requestData.allSchedules; // Array di oggetti con {giorno, ora, email (che contiene stringa con virgole)}
 
-      // 1. Lettura BATCH iniziale
-      const oldData = sheet.getDataRange().getValues();
-      const iscrizioniRange = sheetIscrizioni.getDataRange();
-      const iscrizioniValues = iscrizioniRange.getValues();
-      const insData = ssMain.getSheetByName("Insegnanti").getDataRange().getValues();
+      // 1. INIZIALIZZA IL LOCK
+      const lock = LockService.getScriptLock();
       
-      const teacherRow = insData.find(r => r[1] === authenticatedEmail);
-      const calendarId = teacherRow ? teacherRow[7] : null;
+      try {
+        lock.waitLock(10000);
 
-      // 2. Mappa situazione attuale (Splittiamo le email esistenti per il confronto)
-      const oldAssignments = {}; 
-      for (let giorno in DAY_MAP) {
-        let colOra = DAY_MAP[giorno];
-        for (let r = 1; r < oldData.length; r++) {
-          let ora = oldData[r][colOra];
-          let emailsStr = oldData[r][colOra + 1] ? oldData[r][colOra + 1].toString().toLowerCase().trim() : "";
-          if (ora && emailsStr) {
-            // Creiamo un array di email per quello slot
-            oldAssignments[`${giorno}-${ora}`] = emailsStr.split(",").map(e => e.trim());
+        const ssSchedule = getScheduleSS();
+        const teacherName = requestData.teacherName;
+        const sheet = getTeacherSheet(ssSchedule, teacherName);
+        const ssMain = getMainSS();
+        const sheetIscrizioni = ssMain.getSheetByName("Iscrizioni");
+        const allSchedules = requestData.allSchedules; // Array di oggetti con {giorno, ora, email (che contiene stringa con virgole)}
+
+        // 1. Lettura BATCH iniziale
+        const oldData = sheet.getDataRange().getValues();
+        const iscrizioniRange = sheetIscrizioni.getDataRange();
+        const iscrizioniValues = iscrizioniRange.getValues();
+        const insData = ssMain.getSheetByName("Insegnanti").getDataRange().getValues();
+        
+        const teacherRow = insData.find(r => r[1] === authenticatedEmail);
+        const calendarId = teacherRow ? teacherRow[7] : null;
+
+        // 2. Mappa situazione attuale (Splittiamo le email esistenti per il confronto)
+        const oldAssignments = {}; 
+        for (let giorno in DAY_MAP) {
+          let colOra = DAY_MAP[giorno];
+          for (let r = 1; r < oldData.length; r++) {
+            let ora = oldData[r][colOra];
+            let emailsStr = oldData[r][colOra + 1] ? oldData[r][colOra + 1].toString().toLowerCase().trim() : "";
+            if (ora && emailsStr) {
+              // Creiamo un array di email per quello slot
+              oldAssignments[`${giorno}-${ora}`] = emailsStr.split(",").map(e => e.trim());
+            }
           }
         }
-      }
 
-      // --- 3. RICALCOLO TOTALE CONTATORI (Invece di netChanges) ---
-      // Invece di calcolare la differenza, contiamo quante volte ogni email appare nel NUOVO orario
-      const newCounts = {};
-      allSchedules.forEach(item => {
-          if (item.email) {
-              const emails = item.email.split(",").map(e => e.trim().toLowerCase());
-              emails.forEach(email => {
-                  if (email) newCounts[email] = (newCounts[email] || 0) + 1;
-              });
-          }
-      });
+        // --- 3. RICALCOLO TOTALE CONTATORI (Invece di netChanges) ---
+        // Invece di calcolare la differenza, contiamo quante volte ogni email appare nel NUOVO orario
+        const newCounts = {};
+        allSchedules.forEach(item => {
+            if (item.email) {
+                const emails = item.email.split(",").map(e => e.trim().toLowerCase());
+                emails.forEach(email => {
+                    if (email) newCounts[email] = (newCounts[email] || 0) + 1;
+                });
+            }
+        });
 
-      // Contiamo quante volte ogni email appariva nel VECCHIO orario
-      const oldCounts = {};
-      for (let key in oldAssignments) {
-          oldAssignments[key].forEach(email => {
-              if (email) oldCounts[email] = (oldCounts[email] || 0) + 1;
-          });
-      }
-
-      // Calcoliamo la differenza reale tra nuovo e vecchio conteggio per ogni studente
-      const studentEmails = new Set([...Object.keys(newCounts), ...Object.keys(oldCounts)]);
-      const finalDiffs = {};
-      studentEmails.forEach(email => {
-          const diff = (newCounts[email] || 0) - (oldCounts[email] || 0);
-          if (diff !== 0) finalDiffs[email] = diff;
-      });
-
-      // 4. Aggiornamento BATCH foglio Iscrizioni usando finalDiffs
-      if (Object.keys(finalDiffs).length > 0) {
-          for (let i = 1; i < iscrizioniValues.length; i++) {
-              const email = iscrizioniValues[i][1].toString().toLowerCase().trim();
-              if (finalDiffs[email]) {
-                  // Aggiorniamo basandoci sulla differenza di conteggio totale
-                  iscrizioniValues[i][5] = Math.max(0, (Number(iscrizioniValues[i][5]) || 0) + finalDiffs[email]); 
-                  iscrizioniValues[i][6] = Math.max(0, (Number(iscrizioniValues[i][6]) || 0) + finalDiffs[email]);
-              }
-          }
-          iscrizioniRange.setValues(iscrizioniValues);
-      }
-
-      // 5. Preparazione BATCH foglio Orari (12 colonne standard)
-      const newScheduleMatrix = Array.from({ length: 50 }, () => Array(12).fill(""));
-      
-      allSchedules.forEach(item => {
-        const startCol = DAY_MAP[item.giorno];
-        for (let r = 0; r < 50; r++) {
-          if (!newScheduleMatrix[r][startCol]) {
-            newScheduleMatrix[r][startCol] = item.ora;
-            // Salviamo la stringa con virgole (es: "mario@gmail.com, luca@gmail.com")
-            newScheduleMatrix[r][startCol + 1] = item.email; 
-            break;
-          }
+        // Contiamo quante volte ogni email appariva nel VECCHIO orario
+        const oldCounts = {};
+        for (let key in oldAssignments) {
+            oldAssignments[key].forEach(email => {
+                if (email) oldCounts[email] = (oldCounts[email] || 0) + 1;
+            });
         }
-      });
-      sheet.getRange(2, 1, 50, 12).setValues(newScheduleMatrix);
 
-      // 6. Sincronizzazione Calendario
-      if (calendarId) {
-        // Nota: allSchedules deve contenere gli studenti splittati per creare eventi singoli
-        syncSchedulesToCalendar(calendarId, teacherName, allSchedules);
+        // Calcoliamo la differenza reale tra nuovo e vecchio conteggio per ogni studente
+        const studentEmails = new Set([...Object.keys(newCounts), ...Object.keys(oldCounts)]);
+        const finalDiffs = {};
+        studentEmails.forEach(email => {
+            const diff = (newCounts[email] || 0) - (oldCounts[email] || 0);
+            if (diff !== 0) finalDiffs[email] = diff;
+        });
+
+        // 4. Aggiornamento BATCH foglio Iscrizioni usando finalDiffs
+        if (Object.keys(finalDiffs).length > 0) {
+            for (let i = 1; i < iscrizioniValues.length; i++) {
+                const email = iscrizioniValues[i][1].toString().toLowerCase().trim();
+                if (finalDiffs[email]) {
+                    // Aggiorniamo basandoci sulla differenza di conteggio totale
+                    iscrizioniValues[i][5] = Math.max(0, (Number(iscrizioniValues[i][5]) || 0) + finalDiffs[email]); 
+                    iscrizioniValues[i][6] = Math.max(0, (Number(iscrizioniValues[i][6]) || 0) + finalDiffs[email]);
+                }
+            }
+            iscrizioniRange.setValues(iscrizioniValues);
+        }
+
+        // 5. Preparazione BATCH foglio Orari (12 colonne standard)
+        const newScheduleMatrix = Array.from({ length: 50 }, () => Array(12).fill(""));
+        
+        allSchedules.forEach(item => {
+          const startCol = DAY_MAP[item.giorno];
+          for (let r = 0; r < 50; r++) {
+            if (!newScheduleMatrix[r][startCol]) {
+              newScheduleMatrix[r][startCol] = item.ora;
+              // Salviamo la stringa con virgole (es: "mario@gmail.com, luca@gmail.com")
+              newScheduleMatrix[r][startCol + 1] = item.email; 
+              break;
+            }
+          }
+        });
+        sheet.getRange(2, 1, 50, 12).setValues(newScheduleMatrix);
+
+        // 6. Sincronizzazione Calendario
+        if (calendarId) {
+          // Nota: allSchedules deve contenere gli studenti splittati per creare eventi singoli
+          syncSchedulesToCalendar(calendarId, teacherName, allSchedules);
+        }
+
+        PropertiesService.getScriptProperties().setProperty('LAST_SCHEDULE_UPDATE', Array.from(new Date().getTime().toString()));
+        PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
+
+        return createTextResponse("Success");
+
+      } catch (e) {
+        // Se non riesce a prendere il lock in 10 secondi
+        console.error("Errore o Lock Timeout: " + e.toString());
+        return createTextResponse("Error: Il server è occupato, riprova tra qualche istante.");
+      } finally {
+        // 3. RILASCIA SEMPRE IL LOCK, ANCHE SE CI SONO ERRORI
+        lock.releaseLock();
       }
-
-      PropertiesService.getScriptProperties().setProperty('LAST_SCHEDULE_UPDATE', Array.from(new Date().getTime().toString()));
-      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
-
-      return createTextResponse("Success");
     }
 
     if (action === "updatePaidLessons") {
@@ -838,45 +978,70 @@ function doPost(e) {
     }
 
     if (action === "removeSlotAndDecrement") {
-      const data = JSON.parse(e.postData.contents);
-      const { studentEmail, teacherName } = data;
-      
-      // CREA UNA CHIAVE DI IDEMPOTENZA
-      const lockKey = "lock_" + studentEmail + "_" + teacherName;
-      const scriptProperties = PropertiesService.getScriptProperties();
-      const lastCall = scriptProperties.getProperty(lockKey);
-      const now = new Date().getTime();
 
-      // Se l'ultima chiamata è avvenuta meno di 2 secondi fa, ignoriamo questa
-      if (lastCall && (now - parseInt(lastCall)) < 2000) {
-        return createTextResponse("Ignored: Duplicated request");
-      }
-      scriptProperties.setProperty(lockKey, now.toString());
-      
-      if (!studentEmail) return createTextResponse("Success: Slot vuoto rimosso");
+      if (!authenticatedEmail) return createTextResponse("Error: Non autorizzato");
 
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const sheetIscrizioni = ss.getSheetByName("Iscrizioni");
-      const rows = sheetIscrizioni.getDataRange().getValues();
+      // 1. INIZIALIZZA IL LOCK
+      const lock = LockService.getScriptLock();
       
-      for (let i = 1; i < rows.length; i++) {
-        // Cerchiamo la riga che corrisponde a Studente + Insegnante
-        if (rows[i][1] === studentEmail && rows[i][3] === teacherName) {
-          // Decrementiamo Svolte (Col F/5) e Da Pagare (Col G/6)
-          let svolte = Math.max(0, rows[i][5] - 1);
-          let daPagare = Math.max(0, rows[i][6] - 1);
-          
-          sheetIscrizioni.getRange(i + 1, 6).setValue(svolte);
-          sheetIscrizioni.getRange(i + 1, 7).setValue(daPagare);
-          break;
+      try {
+        lock.waitLock(10000);
+
+        const data = JSON.parse(e.postData.contents);
+        const { studentEmail, teacherName } = data;
+        
+        // CREA UNA CHIAVE DI IDEMPOTENZA
+        const lockKey = "lock_" + studentEmail + "_" + teacherName;
+        const scriptProperties = PropertiesService.getScriptProperties();
+        const lastCall = scriptProperties.getProperty(lockKey);
+        const now = new Date().getTime();
+
+        // Se l'ultima chiamata è avvenuta meno di 2 secondi fa, ignoriamo questa
+        if (lastCall && (now - parseInt(lastCall)) < 2000) {
+          return createTextResponse("Ignored: Duplicated request");
         }
+        scriptProperties.setProperty(lockKey, now.toString());
+        
+        if (!studentEmail) return createTextResponse("Success: Slot vuoto rimosso");
+
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const sheetIscrizioni = ss.getSheetByName("Iscrizioni");
+        const rows = sheetIscrizioni.getDataRange().getValues();
+        
+        for (let i = 1; i < rows.length; i++) {
+          // Cerchiamo la riga che corrisponde a Studente + Insegnante
+          if (rows[i][1] === studentEmail && rows[i][3] === teacherName) {
+            // Decrementiamo Svolte (Col F/5) e Da Pagare (Col G/6)
+            let svolte = Math.max(0, rows[i][5] - 1);
+            let daPagare = Math.max(0, rows[i][6] - 1);
+            
+            sheetIscrizioni.getRange(i + 1, 6).setValue(svolte);
+            sheetIscrizioni.getRange(i + 1, 7).setValue(daPagare);
+            break;
+          }
+        }
+        PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
+        return createTextResponse("Success: Contatori aggiornati");
+      } catch (e) {
+        // Se non riesce a prendere il lock in 10 secondi
+        console.error("Errore o Lock Timeout: " + e.toString());
+        return createTextResponse("Error: Il server è occupato, riprova tra qualche istante.");
+      } finally {
+        // 3. RILASCIA SEMPRE IL LOCK, ANCHE SE CI SONO ERRORI
+        lock.releaseLock();
       }
-      PropertiesService.getScriptProperties().setProperty('last_update_all', new Date().getTime().toString());
-      return createTextResponse("Success: Contatori aggiornati");
     }
 
     if (action === "updateStudentFeedback") {
       return handleStudentFeedback(requestData);
+    }
+
+    if (action === "resolveFeedback") {
+      return resolveStudentFeedback(JSON.parse(e.postData.contents));
+    }
+
+    if (action === "getAIOptimizedSchedule") {
+      return getAIOptimizedSchedule(JSON.parse(e.postData.contents));
     }
 
     if (action === "subscribe") {

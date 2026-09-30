@@ -17,7 +17,7 @@ import {
     NotificationsNone as NotificationsIcon,
     Feedback as FeedbackIcon
 } from '@mui/icons-material';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid, clearAllCache } from "./config/config";
 
 const pulseStyles = {
     '@keyframes pulse-bg': {
@@ -36,38 +36,28 @@ export default function DashboardInsegnante() {
     });
 
     // --- RECUPERO DATI DALLA CACHE LOCALE ---
-    const [subscribers, setSubscribers] = useState(() => {
-        const saved = localStorage.getItem('cache_subscribers');
-        return saved ? JSON.parse(saved) : [];
-    });
-
-    const [pendingAbsences, setPendingAbsences] = useState(() => {
-        const saved = localStorage.getItem('cache_absences');
-        return saved ? JSON.parse(saved) : [];
-    });
-
-    const [aiLoading, setAiLoading] = useState(false);
-
-    // Se abbiamo già dati in cache, partiamo con loading = false per mostrarli subito
+    const [subscribers, setSubscribers] = useState(() => getCache('cache_subscribers', []));
+    const [pendingAbsences, setPendingAbsences] = useState(() => getCache('cache_absences', []));
+    // aiLoading gestito tramite aiLoadingRef per prevenire re-render a cascata
     const [loading, setLoading] = useState(subscribers.length === 0);
+
+    const aiLoadingRef = React.useRef(false);
+    const isFetchingRef = React.useRef(false);
 
     const handleLogout = useCallback(() => {
         googleLogout();
         Cookies.remove('user_session');
-        // --- PULIZIA CACHE AL LOGOUT ---
-        localStorage.removeItem('cache_subscribers');
-        localStorage.removeItem('cache_feedbacks')
-        localStorage.removeItem('cache_absences');
-        localStorage.removeItem('cache_schedules');
-        localStorage.removeItem('cache_ai_suggestions');
+        clearAllCache();
         navigate('/login', { replace: true });
-    }, [navigate])
+    }, [navigate]);
 
     const runAiBackgroundAnalysis = useCallback(async (absences, schedules) => {
-        // Evitiamo chiamate multiple se non ci sono assenze o se stiamo già caricando
-        if (absences.length === 0 || aiLoading) return;
+        if (absences.length === 0 || aiLoadingRef.current) return;
+        // Evita chiamate AI ripetute se le proposte sono già in cache
+        if (localStorage.getItem('cache_ai_suggestions')) return;
 
-        setAiLoading(true);
+        aiLoadingRef.current = true;
+        // aiLoading = true
         try {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
             const response = await fetch(APPS_SCRIPT_URL, {
@@ -84,78 +74,90 @@ export default function DashboardInsegnante() {
 
             const result = await response.json();
             if (result.proposte) {
-                // Salva le proposte in cache per la pagina Feedback
-                localStorage.setItem('cache_ai_suggestions', JSON.stringify(result.proposte));
+                setCache('cache_ai_suggestions', result.proposte);
                 console.log("Analisi AI di background completata con successo.");
             }
         } catch (error) {
             console.error("Errore analisi AI in background:", error);
         } finally {
-            setAiLoading(false);
+            aiLoadingRef.current = false;
+            // aiLoading = false
         }
-    }, [userData, aiLoading]);
+    }, [userData]);
 
-    const fetchDashboardData = useCallback(async (isSilent = false) => {
-        if (!userData?.id_token) return;
-        if (!isSilent) setLoading(true);
+    const safeFetch = async (url) => {
+        try {
+            const r = await fetch(url);
+            if (!r.ok) return null;
+            const t = await r.text();
+            if (!t.startsWith("{") && !t.startsWith("[")) return null;
+            return JSON.parse(t);
+        } catch (e) {
+            return null;
+        }
+    };
+
+    const fetchDashboardData = useCallback(async (forceRefresh = false) => {
+        if (!userData?.id_token || isFetchingRef.current) return;
+
+        if (!forceRefresh && isCacheValid('cache_subscribers') && isCacheValid('cache_feedbacks')) {
+            setLoading(false);
+            return;
+        }
+
+        isFetchingRef.current = true;
+        if (subscribers.length === 0) setLoading(true);
 
         try {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
 
-            const [resFb, resSubs, resSched] = await Promise.all([
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
-                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`)
+            const [resultFb, resultSubs, resultSched] = await Promise.all([
+                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
+                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
+                safeFetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`)
             ]);
 
-            const resultFb = await resFb.json();
-            const resultSubs = await resSubs.json();
-            const resultSched = await resSched.json();
-
-            // 1. Gestione Feedback & Assenze
             let absences = [];
-            if (resultFb.status === "success") {
+            if (resultFb && resultFb.status === "success") {
                 absences = resultFb.data.filter(f => f.status === "Assente");
                 setPendingAbsences(absences);
-                localStorage.setItem('cache_absences', JSON.stringify(absences));
-                localStorage.setItem('cache_feedbacks', JSON.stringify(resultFb.data));
+                setCache('cache_absences', absences);
+                setCache('cache_feedbacks', resultFb.data);
             }
 
-            // 2. Cache Studenti
-            if (resultSubs.status === "success") {
+            if (resultSubs && resultSubs.status === "success") {
                 setSubscribers(resultSubs.data);
-                localStorage.setItem('cache_subscribers', JSON.stringify(resultSubs.data));
+                setCache('cache_subscribers', resultSubs.data);
             }
 
-            // 3. Cache Agenda
             let schedules = [];
-            if (resultSched.status === "success") {
+            if (resultSched && resultSched.status === "success") {
                 schedules = resultSched.data;
-                localStorage.setItem('cache_schedules', JSON.stringify(schedules));
+                setCache('cache_schedules', schedules);
             }
 
-            // --- INNESCO AI IN BACKGROUND ---
-            // Avviamo l'analisi solo se ci sono assenze da gestire
             if (absences.length > 0 && schedules.length > 0) {
                 runAiBackgroundAnalysis(absences, schedules);
             }
 
         } catch (error) {
-            console.error("Errore sincronizzazione dashboard:", error);
+            console.warn("Errore dashboard:", error);
         } finally {
             setLoading(false);
+            isFetchingRef.current = false;
         }
-    }, [userData, runAiBackgroundAnalysis]);
+    }, [userData, subscribers.length, runAiBackgroundAnalysis]);
 
     useEffect(() => {
         if (!userData) {
             navigate('/login');
-        } else {
-            // Caricamento silenzioso se abbiamo già dati, altrimenti normale
-            const hasCache = subscribers.length > 0;
-            fetchDashboardData(hasCache);
+            return;
         }
-    }, [userData, navigate, fetchDashboardData, subscribers.length]);
+        // Se non abbiamo dati freschi in cache, sincronizziamo una sola volta
+        if (!isCacheValid('cache_subscribers') || !isCacheValid('cache_feedbacks')) {
+            fetchDashboardData(true);
+        }
+    }, [userData, navigate, fetchDashboardData]);
 
     if (!userData) return null;
 

@@ -11,7 +11,7 @@ import {
 import LockIcon from '@mui/icons-material/Lock';
 import SchoolIcon from '@mui/icons-material/School';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, clearAllCache } from "./config/config";
 
 function LoginPage() {
     const navigate = useNavigate();
@@ -34,39 +34,10 @@ function LoginPage() {
         }
     }, []);
 
-    // --- NUOVA LOGICA DI PREFETCHING ---
-    const prefetchDashboardData = async (userData, token) => {
-        // Il prefetch ha senso solo per gli insegnanti
-        if (userData.role !== "Insegnante") return;
-
-        try {
-            const teacherFullName = `${userData.given_name} ${userData.family_name}`;
-
-            // Avviamo le richieste in parallelo per non perdere tempo
-            const [resFb, resSubs] = await Promise.all([
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${token}`),
-                fetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${token}`)
-            ]);
-
-            const dataFb = await resFb.json();
-            const dataSubs = await resSubs.json();
-
-            if (dataFb.status === "success") {
-                const absences = dataFb.data.filter(f => f.status === "Assente");
-                localStorage.setItem('cache_absences', JSON.stringify(absences));
-            }
-
-            if (dataSubs.status === "success") {
-                localStorage.setItem('cache_subscribers', JSON.stringify(dataSubs.data));
-            }
-            console.log("Prefetch completato con successo");
-        } catch (e) {
-            console.error("Prefetch fallito:", e);
-        }
-    };
+    // Prefetch rimosso per velocizzare il login
 
     const completeLogin = async (userData, token, selectedRole) => {
-        setLoading(true); // Attiviamo il loading visivo durante il prefetch
+        setLoading(true);
         const sessionData = { ...userData, id_token: token, role: selectedRole };
 
         Cookies.set('user_session', JSON.stringify(sessionData), {
@@ -75,11 +46,7 @@ function LoginPage() {
 
         setUser(sessionData);
 
-        // Se è un insegnante, scarichiamo i dati PRIMA di cambiare pagina
-        if (selectedRole === "Insegnante") {
-            await prefetchDashboardData(sessionData, token);
-        }
-
+        // Notifica asincrona di registrazione/login al backend (senza bloccare la UI)
         try {
             await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
@@ -87,10 +54,10 @@ function LoginPage() {
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({ id_token: token, role: selectedRole }),
             });
-            navigate('/dashboard');
         } catch (err) {
-            navigate('/dashboard');
+            console.warn("Errore notifica login:", err);
         }
+        navigate('/dashboard');
     };
 
     const handleLoginSuccess = async (response) => {
@@ -141,8 +108,7 @@ function LoginPage() {
     const handleLogout = () => {
         googleLogout();
         Cookies.remove('user_session');
-        localStorage.removeItem('cache_subscribers');
-        localStorage.removeItem('cache_absences');
+        clearAllCache();
         setUser(null);
         setShowSecretField(false);
         setInputCode('');
