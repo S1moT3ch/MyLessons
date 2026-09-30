@@ -1,5 +1,6 @@
 export const CLIENT_ID = "379683469811-hs18j22vq9rnqvvl4a6kq0mvi8aenkao.apps.googleusercontent.com";
 export const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw8KuuDslNhJK9skwhxXfUJ3o-Vll-cicyFkPBfknVtMNbe5pPcMquKNqOgtg9kUK0sMw/exec";
+export const BACKEND_URL = "https://mylessons-backend.vercel.app/api";
 
 // Cache Time-To-Live: 3 minuti (180.000 ms)
 export const CACHE_TTL_MS = 3 * 60 * 1000;
@@ -37,7 +38,7 @@ export const isCacheValid = (key, maxAge = CACHE_TTL_MS) => {
 export const invalidateCache = (key) => {
     try {
         localStorage.removeItem(`${key}_timestamp`);
-    } catch (e) {}
+    } catch (e) { }
 };
 
 export const clearAllCache = () => {
@@ -50,5 +51,5 @@ export const clearAllCache = () => {
             localStorage.removeItem(k);
             localStorage.removeItem(`${k}_timestamp`);
         });
-    } catch (e) {}
+    } catch (e) { }
 };
