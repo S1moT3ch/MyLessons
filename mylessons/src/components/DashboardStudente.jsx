@@ -17,6 +17,22 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { APPS_SCRIPT_URL } from "./config/config";
 
+const formatSubscriptionDate = (rawDate) => {
+    if (!rawDate) return "Recentemente";
+    const d = new Date(rawDate);
+    if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+    }
+    const parts = String(rawDate).split(/[\sT]+/)[0].split(/[/.-]/);
+    if (parts.length === 3 && parts[0].length <= 2 && parts[2].length === 4) {
+        const parsed = new Date(parts[2], parseInt(parts[1], 10) - 1, parts[0]);
+        if (!isNaN(parsed.getTime())) {
+            return parsed.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+        }
+    }
+    return String(rawDate).split(" ")[0] || "Recentemente";
+};
+
 export default function DashboardStudente() {
     const navigate = useNavigate();
 
@@ -263,7 +279,7 @@ export default function DashboardStudente() {
                                             {mySubscriptions.map((sub, index) => (
                                                 <ListItem key={index} sx={{ mb: 1, bgcolor: '#f8fafc', borderRadius: 4 }}>
                                                     <ListItemIcon><Avatar sx={{ bgcolor: 'white', color: '#1976d2' }}><SchoolIcon /></Avatar></ListItemIcon>
-                                                    <ListItemText primary={<Typography fontWeight={700}>{sub.teacherName}</Typography>} secondary={`Iscritto: ${new Date(sub.date).toLocaleDateString()}`} />
+                                                    <ListItemText primary={<Typography fontWeight={700}>{sub.teacherName}</Typography>} secondary={`Iscritto: ${formatSubscriptionDate(sub.date)}`} />
                                                 </ListItem>
                                             ))}
                                         </List>

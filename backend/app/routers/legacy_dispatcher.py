@@ -25,8 +25,27 @@ async def handle_get(request: Request):
     action = params.get("action")
     id_token_str = params.get("token")
 
+    # 1. Se si apre direttamente l'URL nel browser senza parametri
+    if not action and not id_token_str:
+        return JSONResponse({
+            "status": "online",
+            "service": "MyLessons Backend API (Python / FastAPI)",
+            "message": "Il backend è attivo e operativo. Per accedere all'applicazione, apri il frontend all'indirizzo http://localhost:3000",
+            "frontend_url": "http://localhost:3000"
+        })
+
     if action == "ping":
         return JSONResponse({"status": "pong", "timestamp": datetime.now().isoformat()})
+
+    # Test diagnostico automatico di Google Calendar
+    if action == "testCalendar":
+        report = calendar_service.run_calendar_diagnostics()
+        return JSONResponse(report)
+
+    # Sincronizzazione forzata in blocco da Fogli a Google Calendar
+    if action == "syncAllFromSheets":
+        results = schedule_service.sync_all_teachers_to_calendar()
+        return JSONResponse({"status": "success", "results": results})
 
     if action == "verifyTeacherCode":
         input_code = params.get("code", "")
@@ -69,7 +88,8 @@ async def handle_get(request: Request):
                         if auth_email in [e.strip().lower() for e in data[r][col_em].split(",")]:
                             ora_fmt = str(data[r][col_ora]).strip()
                             clean_time = re.sub(r"[^0-9]", "", ora_fmt)
-                            key = f"{t_name}-{g}-{clean_time}-{auth_email}"
+                            clean_day = g.lower().strip().replace("ì", "i")
+                            key = f"{t_name}-{clean_day}-{clean_time}-{auth_email}"
                             result.append({
                                 "giorno": g,
                                 "ora": ora_fmt,
@@ -98,7 +118,8 @@ async def handle_get(request: Request):
         nomi_map = {r[1].lower().strip(): f"{r[2]} {r[3]}".strip() for r in studenti if len(r) >= 4 and r[1]}
 
         result = []
-        for g, col_ora in DAY_MAP.items():
+        for g in ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"]:
+            col_ora = DAY_MAP[g]
             col_em = col_ora + 1
             for r in range(1, len(data)):
                 if col_ora < len(data[r]) and data[r][col_ora]:

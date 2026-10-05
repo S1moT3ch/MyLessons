@@ -9,6 +9,8 @@ from app.config import SPREADSHEET_ID, SCHEDULE_FILE_ID
 
 _cached_gc: Optional[gspread.Client] = None
 _cached_calendar = None
+_cached_ss_main = None
+_cached_ss_schedule = None
 
 def get_google_credentials():
     sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -40,7 +42,18 @@ def get_calendar_client():
     return _cached_calendar
 
 def get_main_spreadsheet():
-    return get_gspread_client().open_by_key(SPREADSHEET_ID)
+    global _cached_ss_main
+    if _cached_ss_main is None:
+        _cached_ss_main = get_gspread_client().open_by_key(SPREADSHEET_ID)
+    return _cached_ss_main
 
 def get_schedule_spreadsheet():
-    return get_gspread_client().open_by_key(SCHEDULE_FILE_ID)
+    global _cached_ss_schedule
+    if _cached_ss_schedule is None:
+        _cached_ss_schedule = get_gspread_client().open_by_key(SCHEDULE_FILE_ID)
+    return _cached_ss_schedule
+
+def clear_spreadsheet_cache():
+    global _cached_ss_main, _cached_ss_schedule
+    _cached_ss_main = None
+    _cached_ss_schedule = None

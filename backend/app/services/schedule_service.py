@@ -1,7 +1,45 @@
-from typing import List, Dict
+import re
+from typing import List, Dict, Any
 from app.config import DAY_MAP
 from app.core.google_clients import get_main_spreadsheet, get_schedule_spreadsheet
 from app.services.calendar_service import sync_schedules_to_calendar
+
+def format_iso_date(raw_val: Any) -> str:
+    """Converte qualsiasi formato di data in ISO 8601 (YYYY-MM-DDTHH:mm:ss) per evitare Invalid Date nel frontend."""
+    if not raw_val:
+        return ""
+    s = str(raw_val).strip()
+    if not s:
+        return ""
+
+    # 1. Se è già formato ISO tipo 2026-10-05...
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return s.replace(" ", "T")
+
+    # 2. Formato italiano DD/MM/YYYY o DD/MM/YYYY HH:MM:SS
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})(?:\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?)?", s)
+    if m:
+        day, month, year, h, minute, sec = m.groups()
+        h = h or "12"
+        minute = minute or "00"
+        sec = sec or "00"
+        return f"{year}-{int(month):02d}-{int(day):02d}T{int(h):02d}:{int(minute):02d}:{int(sec):02d}"
+
+    # 3. Formato inglese Apps Script (es: Mon Oct 05 2026 19:40:00 GMT+0200)
+    months = {
+        "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+        "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
+    }
+    m_eng = re.search(r"([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})(?:\s+(\d{2}):(\d{2}):(\d{2}))?", s)
+    if m_eng:
+        m_str, day, year, h, minute, sec = m_eng.groups()
+        m_num = months.get(m_str.lower(), "01")
+        h = h or "12"
+        minute = minute or "00"
+        sec = sec or "00"
+        return f"{year}-{m_num}-{int(day):02d}T{h}:{minute}:{sec}"
+
+    return s
 
 def get_or_create_teacher_sheet(teacher_name: str):
     ss = get_schedule_spreadsheet()
@@ -50,10 +88,11 @@ def get_teacher_subscribers_with_counts(teacher_id: str) -> List[Dict]:
     result = []
     for row in filtered_subs:
         email = row[1].lower().strip()
+        raw_date = row[4] if len(row) > 4 else ""
         result.append({
             "studentName": nomi_studenti.get(email, "Sconosciuto"),
             "studentEmail": row[1],
-            "date": row[4] if len(row) > 4 else "",
+            "date": format_iso_date(raw_date),
             "lessonCount": weekly_counts.get(email, 0),
             "lezioniSvolte": int(row[5]) if len(row) > 5 and row[5].isdigit() else 0,
             "lezioniDaPagare": int(row[6]) if len(row) > 6 and row[6].isdigit() else 0,
@@ -69,7 +108,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
     old_data = sheet_schedule.get_all_values()
     iscrizioni_rows = sheet_iscrizioni.get_all_values()
 
-    # 1. Recupero eventuale Calendar ID
     sheet_ins = ss_main.worksheet("Insegnanti")
     calendar_id = None
     for r in sheet_ins.get_all_values()[1:]:
@@ -77,7 +115,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
             calendar_id = r[7]
             break
 
-    # 2. Conteggio vecchio orario direttamente dalle celle
     old_counts = {}
     for giorno, col_idx in DAY_MAP.items():
         col_email = col_idx + 1
@@ -90,7 +127,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
                         if clean and "@" in clean:
                             old_counts[clean] = old_counts.get(clean, 0) + 1
 
-    # 3. Conteggio nuovo orario
     new_counts = {}
     for item in all_schedules:
         em_field = item.get("email", "")
@@ -106,7 +142,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
         for em in all_students if new_counts.get(em, 0) - old_counts.get(em, 0) != 0
     }
 
-    # 4. Aggiornamento con filtro rigoroso per NOME DOCENTE
     if final_diffs:
         clean_teacher = teacher_name.lower().strip()
         for i in range(1, len(iscrizioni_rows)):
@@ -123,7 +158,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
 
         sheet_iscrizioni.update(iscrizioni_rows, "A1")
 
-    # 5. Scrittura matrice (50x12)
     matrix = [[""] * 12 for _ in range(50)]
     for item in all_schedules:
         giorno = item.get("giorno")
@@ -137,7 +171,6 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
 
     sheet_schedule.update(matrix, "A2:L51")
 
-    # 6. Sincronizzazione calendario
     if calendar_id:
         sync_schedules_to_calendar(calendar_id, teacher_name, all_schedules)
 
@@ -176,3 +209,70 @@ def reset_schedule_for_week(teacher_name: str, auth_email: str):
         if len(r) > 7 and r[1].lower().strip() == auth_email.lower().strip() and r[7]:
             sync_schedules_to_calendar(r[7], teacher_name, [])
             break
+
+def sync_all_teachers_to_calendar() -> List[Dict]:
+    ss_main = get_main_spreadsheet()
+    ss_schedule = get_schedule_spreadsheet()
+
+    studenti = ss_main.worksheet("Studenti").get_all_values()[1:]
+    nomi_map = {r[1].lower().strip(): f"{r[2]} {r[3]}".strip() for r in studenti if len(r) >= 4 and r[1]}
+
+    insegnanti = ss_main.worksheet("Insegnanti").get_all_values()[1:]
+    results = []
+
+    day_columns = [
+        ("Lunedì", 0, 1),
+        ("Martedì", 2, 3),
+        ("Mercoledì", 4, 5),
+        ("Giovedì", 6, 7),
+        ("Venerdì", 8, 9),
+        ("Sabato", 10, 11)
+    ]
+
+    for r in insegnanti:
+        if len(r) >= 4 and r[0]:
+            teacher_name = f"{r[2]} {r[3]}".strip()
+            cal_id = r[7].strip() if len(r) > 7 else ""
+
+            if not cal_id:
+                results.append({"teacherName": teacher_name, "status": "skipped", "reason": "Nessun Calendar ID presente"})
+                continue
+
+            try:
+                sheet = ss_schedule.worksheet(teacher_name)
+            except Exception:
+                results.append({"teacherName": teacher_name, "status": "skipped", "reason": f"Foglio orario non trovato per '{teacher_name}'"})
+                continue
+
+            data = sheet.get_all_values()
+            all_schedules = []
+
+            for giorno, col_ora, col_em in day_columns:
+                for row_idx in range(1, len(data)):
+                    row_vals = data[row_idx]
+                    if col_ora < len(row_vals) and row_vals[col_ora]:
+                        ora_str = str(row_vals[col_ora]).strip()
+                        emails_str = row_vals[col_em] if col_em < len(row_vals) else ""
+
+                        if ora_str and emails_str:
+                            email_list = [e.strip() for e in emails_str.split(",") if e.strip()]
+                            for em in email_list:
+                                student_name = nomi_map.get(em.lower(), em)
+                                all_schedules.append({
+                                    "giorno": giorno,
+                                    "ora": ora_str,
+                                    "email": em,
+                                    "nome": student_name
+                                })
+
+            sync_schedules_to_calendar(cal_id, teacher_name, all_schedules)
+
+            results.append({
+                "teacherName": teacher_name,
+                "calendarId": cal_id,
+                "status": "synchronized",
+                "eventsCount": len(all_schedules),
+                "events": [{"giorno": s["giorno"], "ora": s["ora"], "studente": s["nome"]} for s in all_schedules]
+            })
+
+    return results

@@ -1,18 +1,30 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
-from app.core.google_clients import get_calendar_client
+from typing import List, Dict, Optional, Any
+from app.core.google_clients import get_calendar_client, get_google_credentials
+
+DAY_OFFSETS: Dict[str, int] = {
+    "lunedi": 0, "lunedì": 0,
+    "martedi": 1, "martedì": 1,
+    "mercoledi": 2, "mercoledì": 2,
+    "giovedi": 3, "giovedì": 3,
+    "venerdi": 4, "venerdì": 4,
+    "sabato": 5,
+    "domenica": 6
+}
 
 def get_start_date_from_slot(day_name: str, time_str: str) -> datetime:
-    days = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"]
-    target_idx = days.index(day_name) if day_name in days else 1
-    now = datetime.now()
-    current_day = (now.weekday() + 1) % 7 
-    diff_to_monday = 1 if current_day == 0 else -(current_day - 1)
-    base_monday = now + timedelta(days=diff_to_monday)
-    target_date = base_monday + timedelta(days=(target_idx - 1))
+    clean_day = day_name.lower().strip()
+    offset = DAY_OFFSETS.get(clean_day, 0)
     
-    parts = time_str.split(":")
+    now = datetime.now()
+    current_weekday = now.weekday()
+    monday_current_week = (now - timedelta(days=current_weekday)).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    target_date = monday_current_week + timedelta(days=offset)
+    
+    clean_time = time_str.strip().replace(".", ":")
+    parts = clean_time.split(":")
     h = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
     m = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     return target_date.replace(hour=h, minute=m, second=0, microsecond=0)
@@ -80,25 +92,35 @@ def sync_schedules_to_calendar(calendar_id: str, teacher_name: str, all_schedule
                 for idx, email in enumerate(emails):
                     student_name = nomi[idx] if idx < len(nomi) and nomi[idx] else email
                     clean_time = re.sub(r"[^0-9]", "", ora)
-                    clean_day = giorno.lower().strip()
+                    clean_day = giorno.lower().strip().replace("ì", "i")
                     clean_email = email.lower().strip()
                     fingerprint = re.sub(r"[^a-zA-Z0-9_]", "", f"FP_{teacher_name}_{clean_day}_{clean_time}_{clean_email}")
 
                     if fingerprint in calendar_map:
                         del calendar_map[fingerprint]
                     else:
-                        event_body = {
+                        base_event_body = {
                             "summary": student_name,
-                            "description": f"Docente: {teacher_name}\nStudente: {email}\n[ID_LESSON_APP]\n[FP:{fingerprint}]",
+                            "description": f"{teacher_name}\nStudente: {email}\n[ID_LESSON_APP]\n[FP:{fingerprint}]",
                             "start": {"dateTime": start_time.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Europe/Rome"},
                             "end": {"dateTime": end_time.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Europe/Rome"},
-                            "attendees": [{"email": email}],
                             "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": 0}]}
                         }
+
+                        created = False
                         try:
-                            service.events().insert(calendarId=calendar_id, body=event_body, sendUpdates="all").execute()
-                        except Exception as ev_err:
-                            print(f"Errore inserimento evento: {ev_err}")
+                            att_body = {**base_event_body, "attendees": [{"email": email}]}
+                            service.events().insert(calendarId=calendar_id, body=att_body, sendUpdates="all").execute()
+                            created = True
+                        except Exception:
+                            pass
+
+                        if not created:
+                            try:
+                                service.events().insert(calendarId=calendar_id, body=base_event_body).execute()
+                                created = True
+                            except Exception as ev_err:
+                                print(f"Errore critico inserimento evento {fingerprint}: {ev_err}")
 
         for fp, old_ev in calendar_map.items():
             try:
@@ -108,3 +130,103 @@ def sync_schedules_to_calendar(calendar_id: str, teacher_name: str, all_schedule
 
     except Exception as e:
         print(f"Errore Sync Calendario: {e}")
+
+def run_calendar_diagnostics() -> Dict[str, Any]:
+    """Test completo di diagnosi per Google Calendar."""
+    from app.core.google_clients import get_main_spreadsheet
+    creds = get_google_credentials()
+    sa_email = getattr(creds, "service_account_email", "unknown")
+    report = {
+        "status": "success",
+        "serviceAccountEmail": sa_email,
+        "timestamp": datetime.now().isoformat(),
+        "teachers": [],
+        "errors": []
+    }
+    try:
+        service = get_calendar_client()
+        ss = get_main_spreadsheet()
+        rows = ss.worksheet("Insegnanti").get_all_values()
+
+        for idx, r in enumerate(rows[1:], start=2):
+            if len(r) >= 4 and r[0]:
+                nome = f"{r[2]} {r[3]}".strip()
+                email = r[1].strip()
+                cal_id = r[7].strip() if len(r) > 7 else ""
+
+                t_info = {
+                    "row": idx,
+                    "teacherName": nome,
+                    "email": email,
+                    "calendarId": cal_id,
+                    "calendarExists": False,
+                    "aclSharing": [],
+                    "upcomingEventsCount": 0,
+                    "testEventCreated": False,
+                    "sampleEvents": [],
+                    "notes": []
+                }
+
+                if not cal_id:
+                    t_info["notes"].append("ATTENZIONE: Colonna H (Calendar ID) vuota!")
+                    report["teachers"].append(t_info)
+                    continue
+
+                try:
+                    cal = service.calendars().get(calendarId=cal_id).execute()
+                    t_info["calendarExists"] = True
+                    t_info["calendarSummary"] = cal.get("summary")
+                    t_info["timeZone"] = cal.get("timeZone")
+                except Exception as e:
+                    t_info["notes"].append(f"Errore accesso calendario: {str(e)}")
+                    report["teachers"].append(t_info)
+                    continue
+
+                try:
+                    acl_res = service.acl().list(calendarId=cal_id).execute()
+                    t_info["aclSharing"] = [
+                        {"user": item.get("scope", {}).get("value"), "role": item.get("role")}
+                        for item in acl_res.get("items", [])
+                    ]
+                except Exception as e:
+                    t_info["notes"].append(f"Errore lettura ACL: {str(e)}")
+
+                try:
+                    now = datetime.now()
+                    ev_res = service.events().list(
+                        calendarId=cal_id,
+                        timeMin=(now - timedelta(days=7)).isoformat() + "Z",
+                        timeMax=(now + timedelta(days=21)).isoformat() + "Z",
+                        singleEvents=True
+                    ).execute()
+                    events = ev_res.get("items", [])
+                    t_info["upcomingEventsCount"] = len(events)
+                    t_info["sampleEvents"] = [
+                        {"summary": ev.get("summary"), "start": ev.get("start", {}).get("dateTime", ev.get("start", {}).get("date", ""))}
+                        for ev in events[:5]
+                    ]
+                except Exception as e:
+                    t_info["notes"].append(f"Errore lettura eventi: {str(e)}")
+
+                try:
+                    test_start = datetime.now() + timedelta(days=3)
+                    test_end = test_start + timedelta(minutes=60)
+                    test_body = {
+                        "summary": "[DIAGNOSTICA] Test Scrittura MyLessons",
+                        "description": "Evento temporaneo di test.\n[ID_LESSON_APP]\n[FP:TEST_TEMP]",
+                        "start": {"dateTime": test_start.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Europe/Rome"},
+                        "end": {"dateTime": test_end.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Europe/Rome"}
+                    }
+                    cr = service.events().insert(calendarId=cal_id, body=test_body).execute()
+                    t_info["testEventCreated"] = True
+                    service.events().delete(calendarId=cal_id, eventId=cr.get("id")).execute()
+                except Exception as e:
+                    t_info["notes"].append(f"Errore creazione evento test: {str(e)}")
+
+                report["teachers"].append(t_info)
+
+    except Exception as e:
+        report["status"] = "error"
+        report["errors"].append(str(e))
+
+    return report

@@ -27,6 +27,22 @@ const pulseStyles = {
     }
 };
 
+const formatSubscriptionDate = (rawDate) => {
+    if (!rawDate) return "Recentemente";
+    const d = new Date(rawDate);
+    if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+    }
+    const parts = String(rawDate).split(/[\sT]+/)[0].split(/[/.-]/);
+    if (parts.length === 3 && parts[0].length <= 2 && parts[2].length === 4) {
+        const parsed = new Date(parts[2], parseInt(parts[1], 10) - 1, parts[0]);
+        if (!isNaN(parsed.getTime())) {
+            return parsed.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+        }
+    }
+    return String(rawDate).split(" ")[0] || "Recentemente";
+};
+
 export default function DashboardInsegnante() {
     const navigate = useNavigate();
 
@@ -305,7 +321,7 @@ export default function DashboardInsegnante() {
                                         primary={<Typography variant="body2" fontWeight="800" sx={{ color: '#2c3e50' }}>{student.studentName}</Typography>}
                                         secondary={
                                             <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                Iscritto il {new Date(student.date).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })}
+                                                Iscritto il {formatSubscriptionDate(student.date)}
                                             </Typography>
                                         }
                                     />

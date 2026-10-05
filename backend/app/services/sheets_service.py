@@ -1,11 +1,35 @@
 import re
+import time
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
 from app.core.google_clients import get_main_spreadsheet
 
+_sheet_cache: Dict[str, Tuple[List, float]] = {}
+
+def get_cached_sheet_values(sheet_name: str, ttl_seconds: int = 45) -> List[List[str]]:
+    now = time.time()
+    if sheet_name in _sheet_cache:
+        vals, expiry = _sheet_cache[sheet_name]
+        if now < expiry:
+            return vals
+
+    try:
+        ss = get_main_spreadsheet()
+        sheet = ss.worksheet(sheet_name)
+        vals = sheet.get_all_values()
+        _sheet_cache[sheet_name] = (vals, now + ttl_seconds)
+        return vals
+    except Exception as e:
+        if sheet_name in _sheet_cache:
+            return _sheet_cache[sheet_name][0]
+        raise e
+
+def invalidate_sheet_cache(sheet_name: str):
+    if sheet_name in _sheet_cache:
+        del _sheet_cache[sheet_name]
+
 def get_teachers_list() -> List[Dict]:
-    sheet = get_main_spreadsheet().worksheet("Insegnanti")
-    rows = sheet.get_all_values()
+    rows = get_cached_sheet_values("Insegnanti", ttl_seconds=60)
     return [
         {"id": r[0], "email": r[1], "name": f"{r[2]} {r[3]}".strip()}
         for r in rows[1:] if len(r) >= 4 and r[0]
@@ -13,11 +37,10 @@ def get_teachers_list() -> List[Dict]:
 
 def check_user_role(email: str) -> Tuple[bool, Optional[str]]:
     clean_email = email.lower().strip()
-    ss = get_main_spreadsheet()
     for sheet_name, role_name in [("Insegnanti", "Insegnante"), ("Studenti", "Studente")]:
         try:
-            sheet = ss.worksheet(sheet_name)
-            for r in sheet.get_all_values()[1:]:
+            rows = get_cached_sheet_values(sheet_name, ttl_seconds=45)
+            for r in rows[1:]:
                 if len(r) > 1 and r[1].lower().strip() == clean_email:
                     return True, role_name
         except Exception:
@@ -25,17 +48,16 @@ def check_user_role(email: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 def get_student_subscriptions(student_email: str) -> List[Dict]:
-    sheet = get_main_spreadsheet().worksheet("Iscrizioni")
-    rows = sheet.get_all_values()
+    from app.services.schedule_service import format_iso_date
+    rows = get_cached_sheet_values("Iscrizioni", ttl_seconds=30)
     return [
-        {"teacherId": r[2], "teacherName": r[3], "date": r[4]}
+        {"teacherId": r[2], "teacherName": r[3], "date": format_iso_date(r[4]) if len(r) > 4 else ""}
         for r in rows[1:] if len(r) > 4 and r[1].lower().strip() == student_email.lower().strip()
     ]
 
 def get_student_balances(student_email: str) -> List[Dict]:
-    ss = get_main_spreadsheet()
-    iscrizioni = ss.worksheet("Iscrizioni").get_all_values()[1:]
-    insegnanti = ss.worksheet("Insegnanti").get_all_values()[1:]
+    iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=30)[1:]
+    insegnanti = get_cached_sheet_values("Insegnanti", ttl_seconds=60)[1:]
 
     nomi_ins = {r[0]: f"{r[2]} {r[3]}".strip() or r[1] for r in insegnanti if len(r) >= 4 and r[0]}
     
@@ -56,6 +78,7 @@ def get_student_balances(student_email: str) -> List[Dict]:
     return result
 
 def update_paid_lessons(student_email: str, teacher_id: str, new_value: Any) -> bool:
+    invalidate_sheet_cache("Iscrizioni")
     sheet = get_main_spreadsheet().worksheet("Iscrizioni")
     rows = sheet.get_all_values()
     for idx, r in enumerate(rows[1:], start=2):
@@ -65,6 +88,7 @@ def update_paid_lessons(student_email: str, teacher_id: str, new_value: Any) -> 
     return False
 
 def update_student_rate(student_email: str, teacher_id: str, new_rate: Any) -> bool:
+    invalidate_sheet_cache("Iscrizioni")
     sheet = get_main_spreadsheet().worksheet("Iscrizioni")
     rows = sheet.get_all_values()
     for idx, r in enumerate(rows[1:], start=2):
@@ -74,6 +98,7 @@ def update_student_rate(student_email: str, teacher_id: str, new_rate: Any) -> b
     return False
 
 def save_or_update_feedback(teacher_name: str, giorno: str, ora: str, email: str, status: str, note: str, pref: str):
+    invalidate_sheet_cache("Feedback")
     clean_time = re.sub(r"[^0-9]", "", ora) if ora else "0000"
     unique_key = f"{teacher_name.strip()}-{giorno.strip()}-{clean_time}-{email.lower().strip()}"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -88,6 +113,7 @@ def save_or_update_feedback(teacher_name: str, giorno: str, ora: str, email: str
         sheet.update([[status, note, pref, timestamp]], f"B{found_idx}:E{found_idx}")
 
 def remove_feedback(teacher_name: str, giorno: str, ora: str, student_name: str) -> bool:
+    invalidate_sheet_cache("Feedback")
     ss = get_main_spreadsheet()
     studenti = ss.worksheet("Studenti").get_all_values()[1:]
     student_email = ""

@@ -7,9 +7,14 @@ MY_CLIENT_ID: str = os.getenv("MY_CLIENT_ID", "379683469811-hs18j22vq9rnqvvl4a6k
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "AIzaSyBwdlidfRS1lPRnqjuEm4OVABA9NlSjG-s")
 TEACHER_SECRET_CODE: str = os.getenv("TEACHER_SECRET_CODE", "")
 
+# Supporta sia formati con accento che senza accento per evitare problemi di encoding
 DAY_MAP: Dict[str, int] = {
-    "Lunedì": 0, "Martedì": 2, "Mercoledì": 4,
-    "Giovedì": 6, "Venerdì": 8, "Sabato": 10
+    "Lunedì": 0, "Lunedi": 0, "lunedì": 0, "lunedi": 0,
+    "Martedì": 2, "Martedi": 2, "martedì": 2, "martedi": 2,
+    "Mercoledì": 4, "Mercoledi": 4, "mercoledì": 4, "mercoledi": 4,
+    "Giovedì": 6, "Giovedi": 6, "giovedì": 6, "giovedi": 6,
+    "Venerdì": 8, "Venerdi": 8, "venerdì": 8, "venerdi": 8,
+    "Sabato": 10, "sabato": 10
 }
 
 DAY_ORDER: List[str] = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"]
