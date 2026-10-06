@@ -73,7 +73,19 @@ export default function SchedulePage() {
     const [pendingChanges, setPendingChanges] = useState(false);
     const [hadChangesBeforeEditing, setHadChangesBeforeEditing] = useState(false);
 
-    const [localSchedules, setLocalSchedules] = useState(() => getCache('cache_schedules', []));
+    const [localSchedules, setLocalSchedules] = useState(() => {
+        const cached = getCache('cache_schedules', []);
+        const cleanList = [];
+        const seen = new Set();
+        for (const item of cached) {
+            const k = `${item.giorno}-${item.ora}`;
+            if (!seen.has(k)) {
+                seen.add(k);
+                cleanList.push(item);
+            }
+        }
+        return cleanList;
+    });
     const [subscribers, setSubscribers] = useState(() => getCache('cache_subscribers', []));
     const [feedbacks, setFeedbacks] = useState(() => getCache('cache_feedbacks', []));
     const [loading, setLoading] = useState(localSchedules.length === 0);
@@ -125,8 +137,17 @@ export default function SchedulePage() {
                 if (text.startsWith("{") || text.startsWith("[")) {
                     const dataSched = JSON.parse(text);
                     if (dataSched.status === "success") {
-                        setLocalSchedules(dataSched.data);
-                        setCache('cache_schedules', dataSched.data);
+                        const cleanList = [];
+                        const seen = new Set();
+                        for (const item of dataSched.data) {
+                            const k = `${item.giorno}-${item.ora}`;
+                            if (!seen.has(k)) {
+                                seen.add(k);
+                                cleanList.push(item);
+                            }
+                        }
+                        setLocalSchedules(cleanList);
+                        setCache('cache_schedules', cleanList);
                     }
                 }
             }
@@ -294,14 +315,17 @@ export default function SchedulePage() {
 
     const handleRemoveSlotCompletely = async (globalIdx) => {
         const slotToRemove = localSchedules[globalIdx];
+        if (!slotToRemove) return;
         const targetDay = slotToRemove.giorno;
+        const targetOra = slotToRemove.ora;
         const isOccupied = slotToRemove.email !== "";
 
-        if (isOccupied && !window.confirm(`Rimuovendo lo slot eliminerai anche la lezione per ${slotToRemove.nome}. Confermi?`)) return;
+        if (isOccupied && !window.confirm(`Rimuovendo lo slot eliminerai anche la lezione per ${slotToRemove.nome || 'lo studente'}. Confermi?`)) return;
 
         setEditingSlot(null);
 
-        const filteredGlobal = localSchedules.filter((_, idx) => idx !== globalIdx);
+        // Rimuove qualsiasi istanza con quel giorno e ora (anche eventuali duplicati residui)
+        const filteredGlobal = localSchedules.filter((s, idx) => !(idx === globalIdx || (s.giorno === targetDay && s.ora === targetOra)));
         const daySlots = filteredGlobal.filter(s => s.giorno === targetDay);
         const recalculatedDay = applyCascade(daySlots);
 
@@ -311,9 +335,8 @@ export default function SchedulePage() {
         ];
 
         setLocalSchedules(finalSchedules);
-        setCache('cache_schedules', finalSchedules); // AGGIORNA LA CACHE
+        setCache('cache_schedules', finalSchedules);
         setHasChanges(true);
-
     };
 
     const handleUpdateLocalSlot = (studentEmail, globalIdx, action = "add", studentIdx = null) => {
@@ -357,9 +380,14 @@ export default function SchedulePage() {
         currentSlot.email = currentSlot.students.map(s => s.email).join(",");
         currentSlot.nome = currentSlot.students.map(s => s.nome).join(", ");
 
-        // 4. Aggiornamento Stato
-        updated[globalIdx] = currentSlot;
-        setLocalSchedules(updated);
+        // 4. Aggiornamento Stato per lo slot e per eventuali repliche
+        const finalUpdated = localSchedules.map((slot, idx) => {
+            if (idx === globalIdx || (slot.giorno === currentSlot.giorno && slot.ora === currentSlot.ora)) {
+                return currentSlot;
+            }
+            return slot;
+        });
+        setLocalSchedules(finalUpdated);
         setPendingChanges(true);
     };
 

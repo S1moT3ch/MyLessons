@@ -105,6 +105,10 @@ def get_teacher_subscribers_with_counts(teacher_id: str) -> List[Dict]:
     return result
 
 def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[Dict]) -> bool:
+    import time
+    from app.config import CANONICAL_DAYS, DAY_MAP, normalize_day
+    from app.services.sheets_service import _persistent_schedules, _schedule_cache
+
     ss_main = get_main_spreadsheet()
     sheet_schedule = get_or_create_teacher_sheet(teacher_name)
     sheet_iscrizioni = ss_main.worksheet("Iscrizioni")
@@ -131,7 +135,8 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
                         if clean and "@" in clean:
                             old_counts[clean] = old_counts.get(clean, 0) + 1
 
-    # Deduplicazione slot in ingresso per chiave (giorno, ora)
+    # Costruisci mappa pulita degli slot inviati dal client (uno per coppia giorno-ora)
+    # Rispettando fedelmente le rimozioni di studenti effettuate dal docente
     seen_slots = {}
     for item in all_schedules:
         g = normalize_day(item.get("giorno", ""))
@@ -141,12 +146,8 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
         key = (g, ora)
         raw_em = item.get("email", "")
         emails = [e.strip().lower() for e in raw_em.split(",") if e.strip() and "@" in e]
-        if key not in seen_slots:
-            seen_slots[key] = emails
-        else:
-            for e in emails:
-                if e not in seen_slots[key]:
-                    seen_slots[key].append(e)
+        # L'ultimo stato trasmesso dal client per quello slot fa fede
+        seen_slots[key] = emails
 
     new_counts = {}
     for (giorno, ora), emails in seen_slots.items():
@@ -188,15 +189,27 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
 
     sheet_schedule.update(matrix, "A2:L51")
 
+    # AGGIORNA IMMEDIATAMENTE LA CACHE IN RAM DEL DOCENTE:
+    # Così se il client o altre schede richiedono l'orario a 0ms dopo il salvataggio,
+    # serviamo subito la nuova matrice pulita senza studenti rimossi, anche sotto quota limit Google 429
+    header = [""] * 12
+    for giorno in CANONICAL_DAYS:
+        col_idx = DAY_MAP[giorno]
+        header[col_idx] = giorno
+        header[col_idx + 1] = "Studente (Email)"
+    new_full_data = [header] + matrix
+    clean_t = teacher_name.strip()
+    _persistent_schedules[clean_t] = new_full_data
+    _schedule_cache[clean_t] = (new_full_data, time.time() + 30)
+
     # Sincronizza e aggiorna automaticamente le righe Feedback
     try:
-        from app.services.sheets_service import update_feedbacks_on_schedule_change, invalidate_sheet_cache
+        from app.services.sheets_service import update_feedbacks_on_schedule_change
         clean_schedules_list = [
             {"giorno": g, "ora": o, "email": ",".join(ems)}
             for (g, o), ems in seen_slots.items()
         ]
         update_feedbacks_on_schedule_change(teacher_name, old_data, clean_schedules_list)
-        invalidate_sheet_cache()
     except Exception as err:
         print(f"[SCHEDULE_SERVICE] Errore sincronizzazione feedback: {err}")
 
