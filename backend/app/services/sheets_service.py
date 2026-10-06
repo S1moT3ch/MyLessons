@@ -2,10 +2,14 @@ import re
 import time
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Any
-from app.core.google_clients import get_main_spreadsheet
+from app.core.google_clients import get_main_spreadsheet, get_schedule_spreadsheet
 from app.config import DAY_MAP
 
 _sheet_cache: Dict[str, Tuple[List, float]] = {}
+_persistent_backup: Dict[str, List] = {}
+
+_schedule_cache: Dict[str, Tuple[List, float]] = {}
+_persistent_schedules: Dict[str, List] = {}
 
 def normalize_fb_key(teacher_name: str, giorno: str, ora: str, email: str) -> str:
     """Restituisce una chiave normalizzata priva di accenti, spaziature anomale e maiuscole."""
@@ -16,7 +20,8 @@ def normalize_fb_key(teacher_name: str, giorno: str, ora: str, email: str) -> st
     clean_e = str(email).strip().lower()
     return f"{clean_t}_{clean_g}_{clean_o}_{clean_e}"
 
-def get_cached_sheet_values(sheet_name: str, ttl_seconds: int = 15) -> List[List[str]]:
+def get_cached_sheet_values(sheet_name: str, ttl_seconds: int = 25) -> List[List[str]]:
+    """Recupera i valori del foglio con cache in-memory e scudo anti-429 Quota Exceeded."""
     now = time.time()
     if sheet_name in _sheet_cache:
         vals, expiry = _sheet_cache[sheet_name]
@@ -28,18 +33,43 @@ def get_cached_sheet_values(sheet_name: str, ttl_seconds: int = 15) -> List[List
         sheet = ss.worksheet(sheet_name)
         vals = sheet.get_all_values()
         _sheet_cache[sheet_name] = (vals, now + ttl_seconds)
+        _persistent_backup[sheet_name] = vals
         return vals
     except Exception as e:
-        if sheet_name in _sheet_cache:
-            return _sheet_cache[sheet_name][0]
+        if sheet_name in _persistent_backup:
+            print(f"[SHEETS_SERVICE] Google 429 Quota o errore su '{sheet_name}'. Servito da cache persistente: {e}")
+            return _persistent_backup[sheet_name]
         raise e
 
+def get_cached_teacher_schedule(teacher_name: str, ttl_seconds: int = 25) -> List[List[str]]:
+    """Recupera la matrice oraria del docente con cache e protezione 429."""
+    now = time.time()
+    clean_t = teacher_name.strip()
+    if clean_t in _schedule_cache:
+        vals, expiry = _schedule_cache[clean_t]
+        if now < expiry:
+            return vals
+
+    try:
+        ss = get_schedule_spreadsheet()
+        sheet = ss.worksheet(clean_t)
+        vals = sheet.get_all_values()
+        _schedule_cache[clean_t] = (vals, now + ttl_seconds)
+        _persistent_schedules[clean_t] = vals
+        return vals
+    except Exception as e:
+        if clean_t in _persistent_schedules:
+            print(f"[SHEETS_SERVICE] Google 429 o errore su orario '{clean_t}'. Servito da backup: {e}")
+            return _persistent_schedules[clean_t]
+        return []
+
 def invalidate_sheet_cache(sheet_name: Optional[str] = None):
-    global _sheet_cache
+    global _sheet_cache, _schedule_cache
     if sheet_name:
         _sheet_cache.pop(sheet_name, None)
     else:
         _sheet_cache.clear()
+        _schedule_cache.clear()
 
 def get_teachers_list() -> List[Dict]:
     rows = get_cached_sheet_values("Insegnanti", ttl_seconds=30)
@@ -62,14 +92,14 @@ def check_user_role(email: str) -> Tuple[bool, Optional[str]]:
 
 def get_student_subscriptions(student_email: str) -> List[Dict]:
     from app.services.schedule_service import format_iso_date
-    rows = get_cached_sheet_values("Iscrizioni", ttl_seconds=10)
+    rows = get_cached_sheet_values("Iscrizioni", ttl_seconds=20)
     return [
         {"teacherId": r[2], "teacherName": r[3], "date": format_iso_date(r[4]) if len(r) > 4 else ""}
         for r in rows[1:] if len(r) > 4 and r[1].lower().strip() == student_email.lower().strip()
     ]
 
 def get_student_balances(student_email: str) -> List[Dict]:
-    iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=10)[1:]
+    iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=20)[1:]
     insegnanti = get_cached_sheet_values("Insegnanti", ttl_seconds=30)[1:]
 
     nomi_ins = {r[0]: f"{r[2]} {r[3]}".strip() or r[1] for r in insegnanti if len(r) >= 4 and r[0]}
@@ -141,7 +171,7 @@ def remove_feedback(teacher_name: str, giorno: str, ora: str, student_name: str 
     ss = get_main_spreadsheet()
     clean_email = student_email.lower().strip() if student_email else ""
     if not clean_email and student_name:
-        studenti = ss.worksheet("Studenti").get_all_values()[1:]
+        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
         for r in studenti:
             if len(r) >= 4 and f"{r[2]} {r[3]}".lower().strip() == student_name.lower().strip():
                 clean_email = r[1].lower().strip()
@@ -165,15 +195,11 @@ def remove_feedback(teacher_name: str, giorno: str, ora: str, student_name: str 
 def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: List[List[str]], new_schedules: List[Dict]):
     """
     Sincronizza e aggiorna automaticamente le righe della tabella Feedback quando il docente
-    sposta o elimina slot orari nell'orario settimanale:
-    - Se uno studente viene spostato a un nuovo giorno/orario, la riga del feedback viene aggiornata
-      alla nuova chiave con status 'Confermata' (eliminando stati di assenza o incongruenze orarie).
-    - Se uno slot per cui c'era feedback viene rimosso, la riga del feedback viene risolta.
+    sposta o elimina slot orari nell'orario settimanale.
     """
     try:
         invalidate_sheet_cache("Feedback")
         
-        # 1. Mappatura vecchi slot per studente
         old_slots_by_email: Dict[str, List[Dict]] = {}
         for g, col_ora in DAY_MAP.items():
             col_em = col_ora + 1
@@ -187,7 +213,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
                             if clean_em and "@" in clean_em:
                                 old_slots_by_email.setdefault(clean_em, []).append({"giorno": g, "ora": ora_val})
 
-        # 2. Mappatura nuovi slot per studente
         new_slots_by_email: Dict[str, List[Dict]] = {}
         for item in new_schedules:
             g = item.get("giorno", "")
@@ -199,7 +224,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
                     if clean_em and "@" in clean_em:
                         new_slots_by_email.setdefault(clean_em, []).append({"giorno": g, "ora": ora_val})
 
-        # 3. Identifica gli studenti con spostamenti o cancellazioni
         ss = get_main_spreadsheet()
         sheet_fb = ss.worksheet("Feedback")
         fb_rows = sheet_fb.get_all_values()
@@ -209,7 +233,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
         all_involved_emails = set(list(old_slots_by_email.keys()) + list(new_slots_by_email.keys()))
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Cerca modifiche riga per riga in Feedback
         rows_to_delete = []
         updates = []
 
@@ -228,7 +251,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
             old_slots = old_slots_by_email.get(fb_email, [])
             new_slots = new_slots_by_email.get(fb_email, [])
 
-            # Controlla se lo slot a cui faceva riferimento questo feedback esiste ancora identico
             norm_fb_key = normalize_fb_key(fb_teacher, fb_giorno, fb_ora, fb_email)
             still_exists_identical = any(
                 normalize_fb_key(teacher_name, s["giorno"], s["ora"], fb_email) == norm_fb_key
@@ -238,8 +260,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
             if still_exists_identical:
                 continue
 
-            # Se lo slot precedente è stato spostato verso un nuovo slot
-            # Cerchiamo un nuovo slot di questo studente che prima non c'era
             unmatched_new = [
                 s for s in new_slots
                 if not any(s["giorno"] == os["giorno"] and s["ora"] == os["ora"] for os in old_slots)
@@ -250,7 +270,6 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
                 new_clean_ora = re.sub(r"[^0-9]", "", target_new_slot["ora"])
                 new_unique_key = f"{teacher_name.strip()}-{target_new_slot['giorno'].strip()}-{new_clean_ora}-{fb_email}"
                 
-                # Lo studente è stato spostato dal docente: aggiorniamo lo status a Confermata!
                 new_status = "Confermata"
                 old_note = r[2] if len(r) > 2 else ""
                 new_note = f"{old_note} (Spostata a {target_new_slot['giorno']} {target_new_slot['ora']})".strip()
@@ -261,14 +280,11 @@ def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: Li
                     "values": [[new_unique_key, new_status, new_note, pref, now_str]]
                 })
             else:
-                # Lo slot è stato rimosso del tutto: rimuoviamo la riga del feedback obsoleto
                 rows_to_delete.append(row_idx)
 
-        # Applica gli aggiornamenti
         for u in updates:
             sheet_fb.update(u["values"], u["range"])
 
-        # Elimina le righe obsolete a ritroso per preservare gli indici
         for r_idx in sorted(rows_to_delete, reverse=True):
             sheet_fb.delete_rows(r_idx)
 

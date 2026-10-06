@@ -189,7 +189,7 @@ export default function SchedulePage() {
             if (document.visibilityState === 'visible' && editingSlot === null && !hasChanges) {
                 fetchData(true);
             }
-        }, 10000);
+        }, 25000);
 
         const onFocus = () => {
             if (editingSlot === null && !hasChanges) {

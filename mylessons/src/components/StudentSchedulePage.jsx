@@ -125,7 +125,7 @@ export default function StudentSchedulePage() {
             if (document.visibilityState === 'visible') {
                 loadScheduleData(true);
             }
-        }, 12000);
+        }, 25000);
 
         // 3. Refresh automatico al ritorno sul tab (senza ricaricare la pagina)
         const handleFocus = () => {

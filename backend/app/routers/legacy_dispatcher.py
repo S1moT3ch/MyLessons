@@ -67,10 +67,9 @@ async def handle_get(request: Request):
         subs = sheets_service.get_student_subscriptions(auth_email)
         target_teachers = [s["teacherName"] for s in subs if s.get("teacherName")]
 
-        ss_main = get_main_spreadsheet()
-        fb_rows = ss_main.worksheet("Feedback").get_all_values()
+        from app.services.sheets_service import normalize_fb_key, get_cached_teacher_schedule, get_cached_sheet_values
+        fb_rows = get_cached_sheet_values("Feedback", ttl_seconds=20)
         
-        from app.services.sheets_service import normalize_fb_key
         fb_map = {}
         for r in fb_rows[1:]:
             if not r or not r[0]: continue
@@ -87,37 +86,39 @@ async def handle_get(request: Request):
                 norm_key = normalize_fb_key(parts[0], parts[1], parts[2], parts[3])
                 fb_map[norm_key] = item_data
 
-        ss_sched = get_schedule_spreadsheet()
-        sheets = [ss_sched.worksheet(t) for t in target_teachers] if target_teachers else ss_sched.worksheets()
-
         result = []
-        for s in sheets:
-            data = s.get_all_values()
-            t_name = s.title
-            for g, col_ora in DAY_MAP.items():
-                col_em = col_ora + 1
-                for r in range(1, len(data)):
-                    if col_em < len(data[r]) and data[r][col_em]:
-                        emails_in_slot = [e.strip().lower() for e in data[r][col_em].split(",") if e.strip()]
-                        if auth_email in emails_in_slot:
-                            ora_fmt = str(data[r][col_ora]).strip()
-                            clean_time = re.sub(r"[^0-9]", "", ora_fmt)
-                            raw_key = f"{t_name}-{g.strip()}-{clean_time}-{auth_email}"
-                            norm_key = normalize_fb_key(t_name, g, ora_fmt, auth_email)
-                            
-                            fb_obj = fb_map.get(norm_key) or fb_map.get(raw_key)
-                            if not fb_obj:
-                                for k, val in fb_map.items():
-                                    if auth_email in k and (clean_time in k or ora_fmt in k):
-                                        fb_obj = val
-                                        break
-                            
-                            result.append({
-                                "giorno": g,
-                                "ora": ora_fmt,
-                                "teacherName": t_name,
-                                "feedbacks": [fb_obj if fb_obj else {"status": "In attesa", "note": ""}]
-                            })
+        for t_name in target_teachers:
+            try:
+                data = get_cached_teacher_schedule(t_name, ttl_seconds=20)
+                if not data or len(data) < 2:
+                    continue
+                for g, col_ora in DAY_MAP.items():
+                    col_em = col_ora + 1
+                    for r in range(1, len(data)):
+                        if col_em < len(data[r]) and data[r][col_em]:
+                            emails_in_slot = [e.strip().lower() for e in data[r][col_em].split(",") if e.strip()]
+                            if auth_email in emails_in_slot:
+                                ora_fmt = str(data[r][col_ora]).strip()
+                                clean_time = re.sub(r"[^0-9]", "", ora_fmt)
+                                raw_key = f"{t_name}-{g.strip()}-{clean_time}-{auth_email}"
+                                norm_key = normalize_fb_key(t_name, g, ora_fmt, auth_email)
+
+                                fb_obj = fb_map.get(norm_key) or fb_map.get(raw_key)
+                                if not fb_obj:
+                                    for k, val in fb_map.items():
+                                        if auth_email in k and (clean_time in k or ora_fmt in k):
+                                            fb_obj = val
+                                            break
+
+                                result.append({
+                                    "giorno": g,
+                                    "ora": ora_fmt,
+                                    "teacherName": t_name,
+                                    "feedbacks": [fb_obj if fb_obj else {"status": "In attesa", "note": ""}]
+                                })
+            except Exception as e_sheet:
+                print(f"[DISPATCHER] Errore lettura orario '{t_name}': {e_sheet}")
+
         result.sort(key=lambda x: DAY_ORDER.index(x["giorno"]) if x["giorno"] in DAY_ORDER else 99)
         return JSONResponse({"status": "success", "data": result})
 
@@ -131,17 +132,16 @@ async def handle_get(request: Request):
 
     if action == "getStudentSchedules":
         teacher_name = params.get("teacherName", "").strip()
-        sheet = schedule_service.get_or_create_teacher_sheet(teacher_name)
-        data = sheet.get_all_values()
+        from app.services.sheets_service import get_cached_teacher_schedule, get_cached_sheet_values
+        data = get_cached_teacher_schedule(teacher_name, ttl_seconds=20)
         if len(data) < 2:
             return JSONResponse({"status": "success", "data": []})
 
-        studenti = get_main_spreadsheet().worksheet("Studenti").get_all_values()[1:]
+        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
         nomi_map = {r[1].lower().strip(): f"{r[2]} {r[3]}".strip() for r in studenti if len(r) >= 4 and r[1]}
 
         result = []
-        for g in ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"]:
-            col_ora = DAY_MAP[g]
+        for g, col_ora in DAY_MAP.items():
             col_em = col_ora + 1
             for r in range(1, len(data)):
                 if col_ora < len(data[r]) and data[r][col_ora]:
@@ -163,9 +163,9 @@ async def handle_get(request: Request):
 
     if action == "getTeacherFeedbackSummary":
         t_name = params.get("teacherName", "").lower().strip()
-        ss = get_main_spreadsheet()
-        fb_data = ss.worksheet("Feedback").get_all_values()[1:]
-        std_data = ss.worksheet("Studenti").get_all_values()[1:]
+        from app.services.sheets_service import get_cached_sheet_values
+        fb_data = get_cached_sheet_values("Feedback", ttl_seconds=20)[1:]
+        std_data = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
 
         id_to_name = {}
         id_to_email = {}

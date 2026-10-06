@@ -96,7 +96,7 @@ export default function DashboardStudente() {
             if (document.visibilityState === 'visible') {
                 loadDashboardData();
             }
-        }, 15000);
+        }, 25000);
         const handleFocus = () => {
             loadDashboardData();
         };

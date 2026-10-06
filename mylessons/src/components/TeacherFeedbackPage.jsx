@@ -104,7 +104,7 @@ export default function TeacherFeedbackPage() {
             if (document.visibilityState === 'visible') {
                 fetchData(true);
             }
-        }, 12000);
+        }, 25000);
         const handleFocus = () => {
             fetchData(true);
         };

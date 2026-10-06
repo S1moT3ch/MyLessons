@@ -184,7 +184,7 @@ export default function DashboardInsegnante() {
             if (document.visibilityState === 'visible') {
                 fetchDashboardData(true);
             }
-        }, 10000);
+        }, 25000);
         const handleFocus = () => {
             fetchDashboardData(true);
         };
