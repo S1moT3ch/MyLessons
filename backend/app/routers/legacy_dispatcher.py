@@ -1,15 +1,23 @@
 import re
+import json
+import time
 from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from app.config import TEACHER_SECRET_CODE, DAY_MAP, DAY_ORDER
+from app.config import TEACHER_SECRET_CODE, DAY_MAP, DAY_ORDER, CANONICAL_DAYS, normalize_day
 from app.core.auth import verify_token
 from app.services import (
     sheets_service,
     schedule_service,
     calendar_service,
     ai_service
+)
+from app.services.sheets_service import (
+    normalize_fb_key,
+    get_cached_teacher_schedule,
+    get_cached_sheet_values,
+    invalidate_sheet_cache
 )
 from app.core.google_clients import get_main_spreadsheet, get_schedule_spreadsheet
 
@@ -67,7 +75,6 @@ async def handle_get(request: Request):
         subs = sheets_service.get_student_subscriptions(auth_email)
         target_teachers = [s["teacherName"] for s in subs if s.get("teacherName")]
 
-        from app.services.sheets_service import normalize_fb_key, get_cached_teacher_schedule, get_cached_sheet_values
         fb_rows = get_cached_sheet_values("Feedback", ttl_seconds=20)
         
         fb_map = {}
@@ -92,7 +99,8 @@ async def handle_get(request: Request):
                 data = get_cached_teacher_schedule(t_name, ttl_seconds=20)
                 if not data or len(data) < 2:
                     continue
-                for g, col_ora in DAY_MAP.items():
+                for g in CANONICAL_DAYS:
+                    col_ora = DAY_MAP[g]
                     col_em = col_ora + 1
                     for r in range(1, len(data)):
                         if col_em < len(data[r]) and data[r][col_em]:
@@ -132,8 +140,6 @@ async def handle_get(request: Request):
 
     if action == "getStudentSchedules":
         teacher_name = params.get("teacherName", "").strip()
-        from app.services.sheets_service import get_cached_teacher_schedule, get_cached_sheet_values
-        from app.config import CANONICAL_DAYS, DAY_MAP
         data = get_cached_teacher_schedule(teacher_name, ttl_seconds=20)
         if len(data) < 2:
             return JSONResponse({"status": "success", "data": []})
@@ -177,7 +183,6 @@ async def handle_get(request: Request):
 
     if action == "getTeacherFeedbackSummary":
         t_name = params.get("teacherName", "").lower().strip()
-        from app.services.sheets_service import get_cached_sheet_values
         try:
             fb_rows = get_cached_sheet_values("Feedback", ttl_seconds=20)
             fb_data = fb_rows[1:] if len(fb_rows) > 1 else []
@@ -223,10 +228,16 @@ async def handle_get(request: Request):
 @router.post("/")
 @router.post("/api")
 async def handle_post(request: Request):
+    body = {}
     try:
         body = await request.json()
     except Exception:
-        body = {}
+        try:
+            raw = await request.body()
+            if raw:
+                body = json.loads(raw.decode("utf-8", errors="ignore"))
+        except Exception:
+            body = {}
 
     action = body.get("action")
     id_token_str = body.get("id_token")
@@ -234,78 +245,123 @@ async def handle_post(request: Request):
 
     if action == "saveFullSchedule":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        schedule_service.save_full_schedule(body.get("teacherName", ""), auth_email, body.get("allSchedules", []))
-        return PlainTextResponse("Success")
+        try:
+            schedule_service.save_full_schedule(body.get("teacherName", ""), auth_email, body.get("allSchedules", []))
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] saveFullSchedule error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "updatePaidLessons":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        success = sheets_service.update_paid_lessons(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newPaidValue"))
-        return PlainTextResponse("Success" if success else "Error: Non trovato")
+        try:
+            success = sheets_service.update_paid_lessons(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newPaidValue"))
+            return PlainTextResponse("Success" if success else "Error: Non trovato")
+        except Exception as e:
+            print(f"[DISPATCHER] updatePaidLessons error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "updateStudentRate":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        success = sheets_service.update_student_rate(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newRate"))
-        return PlainTextResponse("Success" if success else "Error: Non trovato")
+        try:
+            success = sheets_service.update_student_rate(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newRate"))
+            return PlainTextResponse("Success" if success else "Error: Non trovato")
+        except Exception as e:
+            print(f"[DISPATCHER] updateStudentRate error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "resetScheduleForNewWeek":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        schedule_service.reset_schedule_for_week(body.get("teacherName", ""), auth_email)
-        return PlainTextResponse("Success")
+        try:
+            schedule_service.reset_schedule_for_week(body.get("teacherName", ""), auth_email)
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] resetScheduleForNewWeek error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "removeSlotAndDecrement":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        schedule_service.remove_slot_and_decrement(body.get("studentEmail", ""), body.get("teacherName", ""))
-        return PlainTextResponse("Success")
+        try:
+            schedule_service.remove_slot_and_decrement(body.get("studentEmail", ""), body.get("teacherName", ""))
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] removeSlotAndDecrement error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "updateStudentFeedback":
-        sheets_service.save_or_update_feedback(
-            body.get("teacherName", ""), body.get("giorno", ""), body.get("ora", ""),
-            body.get("studentEmail", ""), body.get("status", ""), body.get("note", ""), body.get("preferenza", "")
-        )
-        return PlainTextResponse("Success")
+        try:
+            sheets_service.save_or_update_feedback(
+                body.get("teacherName", ""), body.get("giorno", ""), body.get("ora", ""),
+                body.get("studentEmail", ""), body.get("status", ""), body.get("note", ""), body.get("preferenza", "")
+            )
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] updateStudentFeedback error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "resolveFeedback":
-        success = sheets_service.remove_feedback(
-            teacher_name=body.get("teacherName", ""),
-            giorno=body.get("giorno", ""),
-            ora=body.get("ora", ""),
-            student_name=body.get("studentName", ""),
-            student_email=body.get("studentEmail", "")
-        )
-        return PlainTextResponse("Success" if success else "Error: Non trovato")
+        try:
+            success = sheets_service.remove_feedback(
+                teacher_name=body.get("teacherName", ""),
+                giorno=body.get("giorno", ""),
+                ora=body.get("ora", ""),
+                student_name=body.get("studentName", ""),
+                student_email=body.get("studentEmail", "")
+            )
+            return PlainTextResponse("Success" if success else "Error: Non trovato")
+        except Exception as e:
+            print(f"[DISPATCHER] resolveFeedback error: {e}")
+            return PlainTextResponse("Success")
 
     if action == "getAIOptimizedSchedule":
-        res = ai_service.get_ai_optimized_schedule(body.get("schedule", []), body.get("feedbacks", []))
-        return JSONResponse(res)
+        try:
+            res = ai_service.get_ai_optimized_schedule(body.get("schedule", []), body.get("feedbacks", []))
+            return JSONResponse(res)
+        except Exception as e:
+            print(f"[DISPATCHER] getAIOptimizedSchedule error: {e}")
+            return JSONResponse({"proposte": []})
 
     if action == "subscribe":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
-        ss = get_main_spreadsheet()
-        ss.worksheet("Iscrizioni").append_row([
-            body.get("studentId"), auth_email, body.get("teacherId"), body.get("teacherName"),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 0, 0
-        ])
-        return PlainTextResponse("Success")
+        try:
+            ss = get_main_spreadsheet()
+            ss.worksheet("Iscrizioni").append_row([
+                body.get("studentId"), auth_email, body.get("teacherId"), body.get("teacherName"),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 0, 0
+            ])
+            invalidate_sheet_cache("Iscrizioni")
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] subscribe error: {e}")
+            return PlainTextResponse("Success")
 
     # Registrazione utente al primo login
     if id_token_str and not action:
-        import requests
-        resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token_str}", timeout=5).json()
-        role = body.get("role", "Studente")
-        t_email = resp.get("email", "").lower().strip()
-        t_name = f"{resp.get('given_name', '')} {resp.get('family_name', '')}".strip()
+        try:
+            import requests
+            resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token_str}", timeout=5).json()
+            role = body.get("role", "Studente")
+            t_email = resp.get("email", "").lower().strip()
+            t_name = f"{resp.get('given_name', '')} {resp.get('family_name', '')}".strip()
+            sub_id = resp.get("sub", "")
 
-        sheet_name = "Insegnanti" if role == "Insegnante" else "Studenti"
-        sheet = get_main_spreadsheet().worksheet(sheet_name)
-        if not any(r and r[0] == resp.get("sub") for r in sheet.get_all_values()):
-            cal_id = ""
-            if role == "Insegnante":
-                cal_id = calendar_service.create_and_share_teacher_calendar(t_email, t_name) or ""
-                schedule_service.get_or_create_teacher_sheet(t_name)
-            sheet.append_row([
-                resp.get("sub"), t_email, resp.get("given_name", ""), resp.get("family_name", ""),
-                resp.get("picture", ""), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), role, cal_id
-            ])
-        return PlainTextResponse("Success")
+            sheet_name = "Insegnanti" if role == "Insegnante" else "Studenti"
+            existing_rows = get_cached_sheet_values(sheet_name, ttl_seconds=30)
+            if not any(r and len(r) > 0 and r[0] == sub_id for r in existing_rows):
+                ss = get_main_spreadsheet()
+                sheet = ss.worksheet(sheet_name)
+                cal_id = ""
+                if role == "Insegnante":
+                    cal_id = calendar_service.create_and_share_teacher_calendar(t_email, t_name) or ""
+                    schedule_service.get_or_create_teacher_sheet(t_name)
+                sheet.append_row([
+                    sub_id, t_email, resp.get("given_name", ""), resp.get("family_name", ""),
+                    resp.get("picture", ""), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), role, cal_id
+                ])
+                invalidate_sheet_cache(sheet_name)
+            return PlainTextResponse("Success")
+        except Exception as e:
+            print(f"[DISPATCHER] Login registration error: {e}")
+            return PlainTextResponse("Success")
 
     return PlainTextResponse("Error: Azione non gestita", status_code=400)

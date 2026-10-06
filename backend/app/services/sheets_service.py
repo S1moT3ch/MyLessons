@@ -148,32 +148,55 @@ def save_or_update_feedback(teacher_name: str, giorno: str, ora: str, email: str
     norm_target = normalize_fb_key(teacher_name, giorno, ora, email)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    sheet = get_main_spreadsheet().worksheet("Feedback")
-    rows = sheet.get_all_values()
-    found_idx = -1
-    for idx, r in enumerate(rows[1:], start=2):
-        if not r or not r[0]:
-            continue
-        parts = r[0].split("-")
-        if len(parts) >= 4 and normalize_fb_key(parts[0], parts[1], parts[2], parts[3]) == norm_target:
-            found_idx = idx
-            break
-        elif r[0].strip() == unique_key:
-            found_idx = idx
-            break
+    # 1. Aggiorna immediatamente la cache persistente in RAM per coerenza real-time a 0ms
+    if "Feedback" in _persistent_backup:
+        rows = _persistent_backup["Feedback"]
+        updated = False
+        for idx in range(1, len(rows)):
+            r = rows[idx]
+            if not r or not r[0]: continue
+            parts = r[0].split("-")
+            if (len(parts) >= 4 and normalize_fb_key(parts[0], parts[1], parts[2], parts[3]) == norm_target) or r[0].strip() == unique_key:
+                rows[idx] = [unique_key, status, note, pref, timestamp]
+                updated = True
+                break
+        if not updated:
+            rows.append([unique_key, status, note, pref, timestamp])
 
-    if found_idx == -1:
-        sheet.append_row([unique_key, status, note, pref, timestamp])
-    else:
-        sheet.update([[unique_key, status, note, pref, timestamp]], f"A{found_idx}:E{found_idx}")
+    # 2. Scrittura su Google Sheets protetta con retry
+    for attempt in range(2):
+        try:
+            sheet = get_main_spreadsheet().worksheet("Feedback")
+            rows = sheet.get_all_values()
+            found_idx = -1
+            for idx, r in enumerate(rows[1:], start=2):
+                if not r or not r[0]:
+                    continue
+                parts = r[0].split("-")
+                if len(parts) >= 4 and normalize_fb_key(parts[0], parts[1], parts[2], parts[3]) == norm_target:
+                    found_idx = idx
+                    break
+                elif r[0].strip() == unique_key:
+                    found_idx = idx
+                    break
+
+            if found_idx == -1:
+                sheet.append_row([unique_key, status, note, pref, timestamp])
+            else:
+                sheet.update([[unique_key, status, note, pref, timestamp]], f"A{found_idx}:E{found_idx}")
+            return
+        except Exception as e:
+            print(f"[SHEETS_SERVICE] Tentativo {attempt+1} save_or_update_feedback: {e}")
+            if attempt == 0:
+                time.sleep(1.5)
 
 def remove_feedback(teacher_name: str, giorno: str, ora: str, student_name: str = "", student_email: str = "") -> bool:
     invalidate_sheet_cache("Feedback")
     ss = get_main_spreadsheet()
     clean_email = student_email.lower().strip() if student_email else ""
     if not clean_email and student_name:
-        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
-        for r in studenti:
+        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)
+        for r in studenti[1:] if len(studenti)>1 else []:
             if len(r) >= 4 and f"{r[2]} {r[3]}".lower().strip() == student_name.lower().strip():
                 clean_email = r[1].lower().strip()
                 break
@@ -181,16 +204,33 @@ def remove_feedback(teacher_name: str, giorno: str, ora: str, student_name: str 
         return False
 
     norm_target = normalize_fb_key(teacher_name, giorno, ora, clean_email)
-    sheet_fb = ss.worksheet("Feedback")
-    rows = sheet_fb.get_all_values()
+    
+    # Rimuovi da RAM backup subito
+    if "Feedback" in _persistent_backup:
+        _persistent_backup["Feedback"] = [
+            r for r in _persistent_backup["Feedback"]
+            if not (r and r[0] and (
+                (len(r[0].split("-")) >= 4 and normalize_fb_key(r[0].split("-")[0], r[0].split("-")[1], r[0].split("-")[2], r[0].split("-")[3]) == norm_target)
+                or (clean_email in r[0] and (ora in r[0] or normalize_fb_key(teacher_name, giorno, "", clean_email) in r[0]))
+            ))
+        ]
 
-    for idx, r in enumerate(rows[1:], start=2):
-        if not r or not r[0]:
-            continue
-        parts = r[0].split("-")
-        if (len(parts) >= 4 and normalize_fb_key(parts[0], parts[1], parts[2], parts[3]) == norm_target) or (clean_email in r[0] and (ora in r[0] or normalize_fb_key(teacher_name, giorno, "", clean_email) in r[0])):
-            sheet_fb.delete_rows(idx)
-            return True
+    for attempt in range(2):
+        try:
+            sheet_fb = ss.worksheet("Feedback")
+            rows = sheet_fb.get_all_values()
+            for idx, r in enumerate(rows[1:], start=2):
+                if not r or not r[0]:
+                    continue
+                parts = r[0].split("-")
+                if (len(parts) >= 4 and normalize_fb_key(parts[0], parts[1], parts[2], parts[3]) == norm_target) or (clean_email in r[0] and (ora in r[0] or normalize_fb_key(teacher_name, giorno, "", clean_email) in r[0])):
+                    sheet_fb.delete_rows(idx)
+                    return True
+            return False
+        except Exception as e:
+            print(f"[SHEETS_SERVICE] Tentativo {attempt+1} remove_feedback: {e}")
+            if attempt == 0:
+                time.sleep(1.5)
     return False
 
 def update_feedbacks_on_schedule_change(teacher_name: str, old_schedule_data: List[List[str]], new_schedules: List[Dict]):

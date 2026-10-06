@@ -1,8 +1,8 @@
 export const CLIENT_ID = "379683469811-hs18j22vq9rnqvvl4a6kq0mvi8aenkao.apps.googleusercontent.com";
 export const APPS_SCRIPT_URL = "https://mylessons-backend.vercel.app/api";
 
-// Cache Time-To-Live ridotto a 5 secondi per garantire freschezza istantanea dei dati
-export const CACHE_TTL_MS = 5 * 1000;
+// Cache Time-To-Live impostato a 15 secondi per proteggere le quote API e garantire freschezza
+export const CACHE_TTL_MS = 15 * 1000;
 
 export const setCache = (key, value) => {
     try {
@@ -59,7 +59,15 @@ const syncChannel = typeof window !== 'undefined' && 'BroadcastChannel' in windo
     : null;
 
 export const broadcastSync = (type, payload = {}) => {
-    clearAllCache();
+    if (type === 'FEEDBACK_UPDATED') {
+        invalidateCache('cache_feedbacks');
+        invalidateCache('cache_absences');
+    } else if (type === 'SCHEDULE_UPDATED') {
+        invalidateCache('cache_schedules');
+    } else {
+        clearAllCache();
+    }
+
     if (syncChannel) {
         try {
             syncChannel.postMessage({ type, payload, timestamp: Date.now() });
