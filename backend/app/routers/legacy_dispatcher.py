@@ -133,29 +133,43 @@ async def handle_get(request: Request):
     if action == "getStudentSchedules":
         teacher_name = params.get("teacherName", "").strip()
         from app.services.sheets_service import get_cached_teacher_schedule, get_cached_sheet_values
+        from app.config import CANONICAL_DAYS, DAY_MAP
         data = get_cached_teacher_schedule(teacher_name, ttl_seconds=20)
         if len(data) < 2:
             return JSONResponse({"status": "success", "data": []})
 
-        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
+        studenti_rows = get_cached_sheet_values("Studenti", ttl_seconds=30)
+        studenti = studenti_rows[1:] if len(studenti_rows) > 1 else []
         nomi_map = {r[1].lower().strip(): f"{r[2]} {r[3]}".strip() for r in studenti if len(r) >= 4 and r[1]}
 
         result = []
-        for g, col_ora in DAY_MAP.items():
+        for g in CANONICAL_DAYS:
+            col_ora = DAY_MAP[g]
             col_em = col_ora + 1
+            slot_by_time = {}
             for r in range(1, len(data)):
                 if col_ora < len(data[r]) and data[r][col_ora]:
                     ora_str = str(data[r][col_ora]).strip()
+                    if not ora_str:
+                        continue
                     emails_str = data[r][col_em] if col_em < len(data[r]) else ""
-                    em_list = [e.strip() for e in emails_str.split(",") if e.strip()]
-                    students_arr = [{"email": e, "nome": nomi_map.get(e.lower(), e)} for e in em_list]
-                    result.append({
-                        "giorno": g,
-                        "ora": ora_str,
-                        "email": emails_str,
-                        "students": students_arr,
-                        "nome": students_arr[0]["nome"] if students_arr else ""
-                    })
+                    em_list = [e.strip() for e in emails_str.split(",") if e.strip() and "@" in e]
+                    if ora_str not in slot_by_time:
+                        slot_by_time[ora_str] = list(em_list)
+                    else:
+                        for em in em_list:
+                            if em not in slot_by_time[ora_str]:
+                                slot_by_time[ora_str].append(em)
+
+            for ora_str, emails in sorted(slot_by_time.items(), key=lambda x: x[0]):
+                students_arr = [{"email": e, "nome": nomi_map.get(e.lower(), e)} for e in emails]
+                result.append({
+                    "giorno": g,
+                    "ora": ora_str,
+                    "email": ",".join(emails),
+                    "students": students_arr,
+                    "nome": students_arr[0]["nome"] if students_arr else ""
+                })
         return JSONResponse({"status": "success", "data": result})
 
     if action == "getStudentBalances":
@@ -164,8 +178,15 @@ async def handle_get(request: Request):
     if action == "getTeacherFeedbackSummary":
         t_name = params.get("teacherName", "").lower().strip()
         from app.services.sheets_service import get_cached_sheet_values
-        fb_data = get_cached_sheet_values("Feedback", ttl_seconds=20)[1:]
-        std_data = get_cached_sheet_values("Studenti", ttl_seconds=30)[1:]
+        try:
+            fb_rows = get_cached_sheet_values("Feedback", ttl_seconds=20)
+            fb_data = fb_rows[1:] if len(fb_rows) > 1 else []
+            std_rows = get_cached_sheet_values("Studenti", ttl_seconds=30)
+            std_data = std_rows[1:] if len(std_rows) > 1 else []
+        except Exception as e_fb:
+            print(f"[DISPATCHER] getTeacherFeedbackSummary warning: {e_fb}")
+            fb_data = []
+            std_data = []
 
         id_to_name = {}
         id_to_email = {}

@@ -83,7 +83,16 @@ export default function StudentSchedulePage() {
                 if (viewMode === 'single' && selectedTeacherName) {
                     rawData = rawData.filter(slot => slot.teacherName === selectedTeacherName);
                 }
-                setSchedule(rawData);
+                const uniqueSlots = [];
+                const seenKeys = new Set();
+                for (const item of rawData) {
+                    const k = `${item.teacherName || ''}-${item.giorno}-${item.ora}`;
+                    if (!seenKeys.has(k)) {
+                        seenKeys.add(k);
+                        uniqueSlots.push(item);
+                    }
+                }
+                setSchedule(uniqueSlots);
             }
         } catch (e) {
             console.error("Errore caricamento orario studente:", e);

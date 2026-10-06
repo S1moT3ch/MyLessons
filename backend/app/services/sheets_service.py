@@ -39,7 +39,8 @@ def get_cached_sheet_values(sheet_name: str, ttl_seconds: int = 25) -> List[List
         if sheet_name in _persistent_backup:
             print(f"[SHEETS_SERVICE] Google 429 Quota o errore su '{sheet_name}'. Servito da cache persistente: {e}")
             return _persistent_backup[sheet_name]
-        raise e
+        print(f"[SHEETS_SERVICE] Google 429 o errore su '{sheet_name}'. Ritorno array vuoto di sicurezza: {e}")
+        return []
 
 def get_cached_teacher_schedule(teacher_name: str, ttl_seconds: int = 25) -> List[List[str]]:
     """Recupera la matrice oraria del docente con cache e protezione 429."""

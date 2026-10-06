@@ -1,6 +1,6 @@
 import re
 from typing import List, Dict, Any
-from app.config import DAY_MAP
+from app.config import DAY_MAP, CANONICAL_DAYS, normalize_day
 from app.core.google_clients import get_main_spreadsheet, get_schedule_spreadsheet
 from app.services.calendar_service import sync_schedules_to_calendar
 
@@ -12,11 +12,9 @@ def format_iso_date(raw_val: Any) -> str:
     if not s:
         return ""
 
-    # 1. Se è già formato ISO tipo 2026-10-05...
     if re.match(r"^\d{4}-\d{2}-\d{2}", s):
         return s.replace(" ", "T")
 
-    # 2. Formato italiano DD/MM/YYYY o DD/MM/YYYY HH:MM:SS
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})(?:\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?)?", s)
     if m:
         day, month, year, h, minute, sec = m.groups()
@@ -25,7 +23,6 @@ def format_iso_date(raw_val: Any) -> str:
         sec = sec or "00"
         return f"{year}-{int(month):02d}-{int(day):02d}T{int(h):02d}:{int(minute):02d}:{int(sec):02d}"
 
-    # 3. Formato inglese Apps Script (es: Mon Oct 05 2026 19:40:00 GMT+0200)
     months = {
         "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
         "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
@@ -48,16 +45,24 @@ def get_or_create_teacher_sheet(teacher_name: str):
     except Exception:
         sheet = ss.add_worksheet(title=teacher_name, rows=60, cols=12)
         header = [""] * 12
-        for giorno, col_idx in DAY_MAP.items():
+        for giorno in CANONICAL_DAYS:
+            col_idx = DAY_MAP[giorno]
             header[col_idx] = giorno
             header[col_idx + 1] = "Studente (Email)"
         sheet.insert_row(header, 1)
         return sheet
 
 def get_teacher_subscribers_with_counts(teacher_id: str) -> List[Dict]:
-    ss_main = get_main_spreadsheet()
-    iscrizioni = ss_main.worksheet("Iscrizioni").get_all_values()
-    studenti = ss_main.worksheet("Studenti").get_all_values()
+    from app.services.sheets_service import get_cached_sheet_values, get_cached_teacher_schedule
+    
+    try:
+        iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=25)
+    except Exception:
+        iscrizioni = []
+    try:
+        studenti = get_cached_sheet_values("Studenti", ttl_seconds=30)
+    except Exception:
+        studenti = []
 
     nomi_studenti = {r[1].lower().strip(): f"{r[2]} {r[3]}".strip() for r in studenti[1:] if len(r) >= 4 and r[1]}
 
@@ -72,9 +77,8 @@ def get_teacher_subscribers_with_counts(teacher_id: str) -> List[Dict]:
     weekly_counts = {}
     if teacher_name:
         try:
-            sheet = get_or_create_teacher_sheet(teacher_name)
-            data = sheet.get_all_values()
-            col_indices = [DAY_MAP[g] + 1 for g in DAY_MAP]
+            data = get_cached_teacher_schedule(teacher_name, ttl_seconds=20)
+            col_indices = [DAY_MAP[g] + 1 for g in CANONICAL_DAYS]
             for r in range(1, len(data)):
                 for c in col_indices:
                     if c < len(data[r]) and data[r][c]:
@@ -116,8 +120,8 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
             break
 
     old_counts = {}
-    for giorno, col_idx in DAY_MAP.items():
-        col_email = col_idx + 1
+    for g in CANONICAL_DAYS:
+        col_email = DAY_MAP[g] + 1
         for r in range(1, len(old_data)):
             if col_email < len(old_data[r]):
                 cell = old_data[r][col_email].lower().strip()
@@ -127,14 +131,27 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
                         if clean and "@" in clean:
                             old_counts[clean] = old_counts.get(clean, 0) + 1
 
-    new_counts = {}
+    # Deduplicazione slot in ingresso per chiave (giorno, ora)
+    seen_slots = {}
     for item in all_schedules:
-        em_field = item.get("email", "")
-        if em_field:
-            for em in em_field.split(","):
-                clean = em.strip().lower()
-                if clean and "@" in clean:
-                    new_counts[clean] = new_counts.get(clean, 0) + 1
+        g = normalize_day(item.get("giorno", ""))
+        ora = str(item.get("ora", "")).strip()
+        if not g or not ora:
+            continue
+        key = (g, ora)
+        raw_em = item.get("email", "")
+        emails = [e.strip().lower() for e in raw_em.split(",") if e.strip() and "@" in e]
+        if key not in seen_slots:
+            seen_slots[key] = emails
+        else:
+            for e in emails:
+                if e not in seen_slots[key]:
+                    seen_slots[key].append(e)
+
+    new_counts = {}
+    for (giorno, ora), emails in seen_slots.items():
+        for clean in emails:
+            new_counts[clean] = new_counts.get(clean, 0) + 1
 
     all_students = set(list(new_counts.keys()) + list(old_counts.keys()))
     final_diffs = {
@@ -158,29 +175,37 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
 
         sheet_iscrizioni.update(iscrizioni_rows, "A1")
 
+    # Scrivi la matrice pulita senza righe doppie
     matrix = [[""] * 12 for _ in range(50)]
-    for item in all_schedules:
-        giorno = item.get("giorno")
+    for (giorno, ora), emails in sorted(seen_slots.items(), key=lambda x: (CANONICAL_DAYS.index(x[0][0]) if x[0][0] in CANONICAL_DAYS else 99, x[0][1])):
         if giorno in DAY_MAP:
             start_col = DAY_MAP[giorno]
             for r in range(50):
                 if not matrix[r][start_col]:
-                    matrix[r][start_col] = str(item.get("ora", ""))
-                    matrix[r][start_col + 1] = str(item.get("email", ""))
+                    matrix[r][start_col] = ora
+                    matrix[r][start_col + 1] = ",".join(emails)
                     break
 
     sheet_schedule.update(matrix, "A2:L51")
 
-    # Sincronizza e aggiorna automaticamente le righe Feedback se gli slot sono stati spostati o rimossi
+    # Sincronizza e aggiorna automaticamente le righe Feedback
     try:
         from app.services.sheets_service import update_feedbacks_on_schedule_change, invalidate_sheet_cache
-        update_feedbacks_on_schedule_change(teacher_name, old_data, all_schedules)
+        clean_schedules_list = [
+            {"giorno": g, "ora": o, "email": ",".join(ems)}
+            for (g, o), ems in seen_slots.items()
+        ]
+        update_feedbacks_on_schedule_change(teacher_name, old_data, clean_schedules_list)
         invalidate_sheet_cache()
     except Exception as err:
         print(f"[SCHEDULE_SERVICE] Errore sincronizzazione feedback: {err}")
 
     if calendar_id:
-        sync_schedules_to_calendar(calendar_id, teacher_name, all_schedules)
+        clean_schedules_list = [
+            {"giorno": g, "ora": o, "email": ",".join(ems)}
+            for (g, o), ems in seen_slots.items()
+        ]
+        sync_schedules_to_calendar(calendar_id, teacher_name, clean_schedules_list)
 
     return True
 
@@ -205,7 +230,7 @@ def remove_slot_and_decrement(student_email: str, teacher_name: str) -> bool:
 def reset_schedule_for_week(teacher_name: str, auth_email: str):
     sheet = get_or_create_teacher_sheet(teacher_name)
     data = sheet.get_all_values()
-    col_indices = [DAY_MAP[g] + 1 for g in DAY_MAP]
+    col_indices = [DAY_MAP[g] + 1 for g in CANONICAL_DAYS]
     for r in range(1, len(data)):
         for c in col_indices:
             if c < len(data[r]):
@@ -238,49 +263,25 @@ def sync_all_teachers_to_calendar() -> List[Dict]:
     ]
 
     for r in insegnanti:
-        if len(r) >= 4 and r[0]:
-            teacher_name = f"{r[2]} {r[3]}".strip()
-            cal_id = r[7].strip() if len(r) > 7 else ""
-
-            if not cal_id:
-                results.append({"teacherName": teacher_name, "status": "skipped", "reason": "Nessun Calendar ID presente"})
+        if len(r) > 7 and r[7]:
+            calendar_id = r[7]
+            teacher_name = f"{r[2]} {r[3]}".strip() if len(r) >= 4 else ""
+            if not teacher_name:
                 continue
-
             try:
                 sheet = ss_schedule.worksheet(teacher_name)
-            except Exception:
-                results.append({"teacherName": teacher_name, "status": "skipped", "reason": f"Foglio orario non trovato per '{teacher_name}'"})
-                continue
-
-            data = sheet.get_all_values()
-            all_schedules = []
-
-            for giorno, col_ora, col_em in day_columns:
-                for row_idx in range(1, len(data)):
-                    row_vals = data[row_idx]
-                    if col_ora < len(row_vals) and row_vals[col_ora]:
-                        ora_str = str(row_vals[col_ora]).strip()
-                        emails_str = row_vals[col_em] if col_em < len(row_vals) else ""
-
-                        if ora_str and emails_str:
-                            email_list = [e.strip() for e in emails_str.split(",") if e.strip()]
-                            for em in email_list:
-                                student_name = nomi_map.get(em.lower(), em)
-                                all_schedules.append({
-                                    "giorno": giorno,
-                                    "ora": ora_str,
-                                    "email": em,
-                                    "nome": student_name
-                                })
-
-            sync_schedules_to_calendar(cal_id, teacher_name, all_schedules)
-
-            results.append({
-                "teacherName": teacher_name,
-                "calendarId": cal_id,
-                "status": "synchronized",
-                "eventsCount": len(all_schedules),
-                "events": [{"giorno": s["giorno"], "ora": s["ora"], "studente": s["nome"]} for s in all_schedules]
-            })
+                matrix = sheet.get_all_values()
+                schedules = []
+                for g, col_ora, col_em in day_columns:
+                    for row_idx in range(1, len(matrix)):
+                        if col_ora < len(matrix[row_idx]) and matrix[row_idx][col_ora]:
+                            ora = matrix[row_idx][col_ora].strip()
+                            email = matrix[row_idx][col_em].strip() if col_em < len(matrix[row_idx]) else ""
+                            if ora:
+                                schedules.append({"giorno": g, "ora": ora, "email": email})
+                sync_schedules_to_calendar(calendar_id, teacher_name, schedules)
+                results.append({"teacher": teacher_name, "status": "synced", "count": len(schedules)})
+            except Exception as e:
+                results.append({"teacher": teacher_name, "status": "error", "error": str(e)})
 
     return results

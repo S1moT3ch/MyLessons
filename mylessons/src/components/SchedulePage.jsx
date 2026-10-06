@@ -276,10 +276,20 @@ export default function SchedulePage() {
     };
 
     const getLessonsData = useCallback((targetDay) => {
-        return localSchedules
+        const slots = localSchedules
             .map((slot, globalIdx) => ({ ...slot, globalIdx }))
             .filter(slot => slot.giorno === targetDay)
             .sort((a, b) => a.ora.localeCompare(b.ora));
+
+        const unique = [];
+        const seenTimes = new Set();
+        for (const s of slots) {
+            if (!seenTimes.has(s.ora)) {
+                seenTimes.add(s.ora);
+                unique.push(s);
+            }
+        }
+        return unique;
     }, [localSchedules]);
 
     const handleRemoveSlotCompletely = async (globalIdx) => {
