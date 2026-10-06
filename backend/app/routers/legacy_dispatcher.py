@@ -69,10 +69,23 @@ async def handle_get(request: Request):
 
         ss_main = get_main_spreadsheet()
         fb_rows = ss_main.worksheet("Feedback").get_all_values()
-        fb_map = {
-            r[0]: {"status": r[1] if len(r)>1 else "", "note": r[2] if len(r)>2 else "", "preferenza": r[3] if len(r)>3 else ""}
-            for r in fb_rows[1:] if r and auth_email in r[0]
-        }
+        
+        from app.services.sheets_service import normalize_fb_key
+        fb_map = {}
+        for r in fb_rows[1:]:
+            if not r or not r[0]: continue
+            raw_key = r[0].strip()
+            item_data = {
+                "status": r[1] if len(r)>1 else "",
+                "note": r[2] if len(r)>2 else "",
+                "preferenza": r[3] if len(r)>3 else "",
+                "timestamp": r[4] if len(r)>4 else ""
+            }
+            fb_map[raw_key] = item_data
+            parts = raw_key.split("-")
+            if len(parts) >= 4:
+                norm_key = normalize_fb_key(parts[0], parts[1], parts[2], parts[3])
+                fb_map[norm_key] = item_data
 
         ss_sched = get_schedule_spreadsheet()
         sheets = [ss_sched.worksheet(t) for t in target_teachers] if target_teachers else ss_sched.worksheets()
@@ -85,16 +98,25 @@ async def handle_get(request: Request):
                 col_em = col_ora + 1
                 for r in range(1, len(data)):
                     if col_em < len(data[r]) and data[r][col_em]:
-                        if auth_email in [e.strip().lower() for e in data[r][col_em].split(",")]:
+                        emails_in_slot = [e.strip().lower() for e in data[r][col_em].split(",") if e.strip()]
+                        if auth_email in emails_in_slot:
                             ora_fmt = str(data[r][col_ora]).strip()
                             clean_time = re.sub(r"[^0-9]", "", ora_fmt)
-                            clean_day = g.lower().strip().replace("ì", "i")
-                            key = f"{t_name}-{clean_day}-{clean_time}-{auth_email}"
+                            raw_key = f"{t_name}-{g.strip()}-{clean_time}-{auth_email}"
+                            norm_key = normalize_fb_key(t_name, g, ora_fmt, auth_email)
+                            
+                            fb_obj = fb_map.get(norm_key) or fb_map.get(raw_key)
+                            if not fb_obj:
+                                for k, val in fb_map.items():
+                                    if auth_email in k and (clean_time in k or ora_fmt in k):
+                                        fb_obj = val
+                                        break
+                            
                             result.append({
                                 "giorno": g,
                                 "ora": ora_fmt,
                                 "teacherName": t_name,
-                                "feedbacks": [fb_map.get(key, {"status": "In attesa", "note": ""})]
+                                "feedbacks": [fb_obj if fb_obj else {"status": "In attesa", "note": ""}]
                             })
         result.sort(key=lambda x: DAY_ORDER.index(x["giorno"]) if x["giorno"] in DAY_ORDER else 99)
         return JSONResponse({"status": "success", "data": result})
@@ -222,7 +244,13 @@ async def handle_post(request: Request):
         return PlainTextResponse("Success")
 
     if action == "resolveFeedback":
-        success = sheets_service.remove_feedback(body.get("teacherName", ""), body.get("giorno", ""), body.get("ora", ""), body.get("studentName", ""))
+        success = sheets_service.remove_feedback(
+            teacher_name=body.get("teacherName", ""),
+            giorno=body.get("giorno", ""),
+            ora=body.get("ora", ""),
+            student_name=body.get("studentName", ""),
+            student_email=body.get("studentEmail", "")
+        )
         return PlainTextResponse("Success" if success else "Error: Non trovato")
 
     if action == "getAIOptimizedSchedule":

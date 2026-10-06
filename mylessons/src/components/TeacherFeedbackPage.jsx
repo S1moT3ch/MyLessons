@@ -15,7 +15,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid, broadcastSync, onSync } from "./config/config";
 
 export default function TeacherFeedbackPage() {
     const navigate = useNavigate();
@@ -94,6 +94,30 @@ export default function TeacherFeedbackPage() {
             setLoading(false);
         }
     }, [navigate, feedbackList.length]);
+
+    // --- SINCRONIZZAZIONE REAL-TIME E AUTO-REFRESH SILENTE ---
+    useEffect(() => {
+        const unsub = onSync(() => {
+            fetchData(true);
+        });
+        const timer = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                fetchData(true);
+            }
+        }, 12000);
+        const handleFocus = () => {
+            fetchData(true);
+        };
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') handleFocus();
+        });
+        return () => {
+            unsub();
+            clearInterval(timer);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [fetchData]);
 
     // --- LOGICA AI ---
     const handleAIOptimize = useCallback(async (isSilent = false) => {
@@ -200,6 +224,7 @@ export default function TeacherFeedbackPage() {
 
                     return newList;
                 });
+                broadcastSync('FEEDBACK_RESOLVED', { student: item.studentName, giorno: item.giorno });
                 setNotification({ open: true, message: 'Lezione risolta correttamente!', severity: 'success' });
             } else {
                 setErrorDialog({ open: true, title: 'Errore', message: `Database: ${result}` });

@@ -15,7 +15,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import { APPS_SCRIPT_URL } from "./config/config";
+import { APPS_SCRIPT_URL, onSync } from "./config/config";
 
 const formatSubscriptionDate = (rawDate) => {
     if (!rawDate) return "Recentemente";
@@ -86,6 +86,30 @@ export default function DashboardStudente() {
     }, [handleLogout, navigate]);
 
     useEffect(() => { loadDashboardData(); }, [loadDashboardData]);
+
+    // Sincronizzazione Real-Time tra schede e auto-refresh al focus
+    useEffect(() => {
+        const unsub = onSync(() => {
+            loadDashboardData();
+        });
+        const timer = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                loadDashboardData();
+            }
+        }, 15000);
+        const handleFocus = () => {
+            loadDashboardData();
+        };
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') handleFocus();
+        });
+        return () => {
+            unsub();
+            clearInterval(timer);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [loadDashboardData]);
 
     const handleSubscribe = async () => {
         if (!selectedTeacher || !userData?.id_token) return;

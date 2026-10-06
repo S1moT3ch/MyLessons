@@ -20,7 +20,7 @@ import {
 import FeedbackIcon from '@mui/icons-material/Feedback';
 import { useNavigate, useLocation } from 'react-router-dom';
 import Cookies from 'js-cookie';
-import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid, broadcastSync, onSync } from "./config/config";
 
 // --- HELPERS ---
 
@@ -159,6 +159,25 @@ export default function SchedulePage() {
         }
     }, [fetchData, hasChanges, editingSlot]);
 
+    // Ascolto sincronizzazione real-time e focus
+    useEffect(() => {
+        const unsub = onSync((data) => {
+            if (editingSlot === null && !hasChanges) {
+                fetchData(true);
+            }
+        });
+        const onFocus = () => {
+            if (editingSlot === null && !hasChanges) {
+                fetchData(true);
+            }
+        };
+        window.addEventListener('focus', onFocus);
+        return () => {
+            unsub();
+            window.removeEventListener('focus', onFocus);
+        };
+    }, [fetchData, hasChanges, editingSlot]);
+
     const saveFullDay = async () => {
         if (saving) return;
 
@@ -197,6 +216,7 @@ export default function SchedulePage() {
                 if (!pendingChanges) {
                     setHasChanges(false);
                 }
+                broadcastSync('SCHEDULE_UPDATED');
             } else {
                 setHasChanges(true);
                 alert("Errore nel salvataggio.");

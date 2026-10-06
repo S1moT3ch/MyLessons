@@ -17,7 +17,7 @@ import {
     NotificationsNone as NotificationsIcon,
     Feedback as FeedbackIcon
 } from '@mui/icons-material';
-import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid, clearAllCache } from "./config/config";
+import { APPS_SCRIPT_URL, getCache, setCache, isCacheValid, clearAllCache, onSync } from "./config/config";
 
 const pulseStyles = {
     '@keyframes pulse-bg': {
@@ -174,6 +174,30 @@ export default function DashboardInsegnante() {
             fetchDashboardData(true);
         }
     }, [userData, navigate, fetchDashboardData]);
+
+    // Sincronizzazione Real-Time tra schede e auto-refresh al focus
+    useEffect(() => {
+        const unsub = onSync(() => {
+            fetchDashboardData(true);
+        });
+        const timer = setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                fetchDashboardData(true);
+            }
+        }, 15000);
+        const handleFocus = () => {
+            fetchDashboardData(true);
+        };
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') handleFocus();
+        });
+        return () => {
+            unsub();
+            clearInterval(timer);
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [fetchDashboardData]);
 
     if (!userData) return null;
 

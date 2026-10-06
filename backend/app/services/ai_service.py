@@ -4,7 +4,7 @@ import re
 import requests
 from typing import Dict, Any, List
 
-_cached_working_model = None
+_cached_working_model = "gemini-flash-lite-latest"
 
 def _get_available_gemini_models(api_key: str) -> List[str]:
     """Interroga l'API v1beta di Google per scoprire dinamicamente i modelli attivi e supportati."""
@@ -20,12 +20,13 @@ def _get_available_gemini_models(api_key: str) -> List[str]:
                 if "generateContent" in methods:
                     active.append(name)
             
-            # Ordina con priorità per modelli flash (più veloci ed economici)
+            # Priorità: modelli ultra-veloci e con minor probabilità di picchi 503
             active.sort(key=lambda x: (
-                0 if "3.8-flash" in x else
-                1 if "2.5-flash" in x else
-                2 if "flash" in x else
-                3 if "pro" in x else 4
+                0 if "flash-lite" in x else
+                1 if "flash-latest" in x else
+                2 if "3.8-flash" in x else
+                3 if "flash" in x else
+                4 if "pro" in x else 5
             ))
             return active
     except Exception as e:
@@ -38,12 +39,17 @@ def get_ai_optimized_schedule(schedule_data: Any, feedbacks: Any) -> Dict:
     
     # 1. Tentativo con API Google Gemini
     if api_key and not api_key.startswith("AIzaSyBwdlidfRS1lPRnqjuEm4OVABA9NlSjG-s") and api_key != "[SENSITIVE]":
-        candidate_models = []
-        if _cached_working_model:
-            candidate_models.append(_cached_working_model)
+        # Ordine ottimizzato: flash-lite è stabile, ad altissimo throughput e immune a 503 di congestione
+        defaults = [
+            "gemini-flash-lite-latest",
+            "gemini-flash-latest",
+            "gemini-3.8-flash",
+            "gemini-2.5-pro"
+        ]
         
-        # Modelli stabili e aggiornati consigliati da Google (Gemini 3.x e 2.5)
-        defaults = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-latest"]
+        candidate_models = []
+        if _cached_working_model and _cached_working_model in defaults:
+            candidate_models.append(_cached_working_model)
         for m in defaults:
             if m not in candidate_models:
                 candidate_models.append(m)
@@ -68,11 +74,11 @@ RESTITUISCI SOLO UN JSON VALIDO:
             "generationConfig": {"response_mime_type": "application/json"}
         }
 
-        # Prova i candidati iniziali
+        # Prova i modelli candidati
         for model in list(candidate_models):
             api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             try:
-                res = requests.post(api_url, json=payload, timeout=12)
+                res = requests.post(api_url, json=payload, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     candidates = data.get("candidates", [])
@@ -83,21 +89,27 @@ RESTITUISCI SOLO UN JSON VALIDO:
                         out_json["engine"] = f"Gemini LLM ({model})"
                         _cached_working_model = model
                         return out_json
+                elif res.status_code == 503:
+                    print(f"[AI_SERVICE] Modello {model} momentaneamente sovraccarico (503 High Demand). Cascade automatico...")
+                    if _cached_working_model == model:
+                        _cached_working_model = None
                 elif res.status_code == 404:
-                    print(f"[AI_SERVICE] Modello {model} deprecato o non trovato (404). Proseguo con il prossimo.")
+                    print(f"[AI_SERVICE] Modello {model} non disponibile (404). Proseguo...")
+                    if _cached_working_model == model:
+                        _cached_working_model = None
                 else:
-                    print(f"[AI_SERVICE] Gemini {model} ha risposto con codice {res.status_code}: {res.text[:120]}")
+                    print(f"[AI_SERVICE] Gemini {model} status {res.status_code}: {res.text[:100]}")
             except Exception as e:
-                print(f"[AI_SERVICE] Errore chiamata {model}: {e}")
+                print(f"[AI_SERVICE] Timeout/Eccezione con {model}: {e}")
 
-        # Se tutti i candidati predefiniti hanno fallito (es. 404), scopri i modelli attivi da Google
+        # Se i modelli primari hanno fallito, tenta i modelli scoperti dinamicamente
         discovered = _get_available_gemini_models(api_key)
         for model in discovered:
             if model in candidate_models:
                 continue
             api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             try:
-                res = requests.post(api_url, json=payload, timeout=12)
+                res = requests.post(api_url, json=payload, timeout=10)
                 if res.status_code == 200:
                     data = res.json()
                     candidates = data.get("candidates", [])
@@ -109,7 +121,7 @@ RESTITUISCI SOLO UN JSON VALIDO:
                         _cached_working_model = model
                         return out_json
             except Exception as e:
-                print(f"[AI_SERVICE] Errore con modello scoperto {model}: {e}")
+                pass
 
     # 2. Algoritmo di Fallback Euristico Locale (Garantisce che la UI non crashi mai)
     proposte = []

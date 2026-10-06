@@ -1,8 +1,8 @@
 export const CLIENT_ID = "379683469811-hs18j22vq9rnqvvl4a6kq0mvi8aenkao.apps.googleusercontent.com";
 export const APPS_SCRIPT_URL = "https://mylessons-backend.vercel.app/api";
 
-// Cache Time-To-Live: 3 minuti (180.000 ms)
-export const CACHE_TTL_MS = 3 * 60 * 1000;
+// Cache Time-To-Live ridotto a 5 secondi per garantire freschezza istantanea dei dati
+export const CACHE_TTL_MS = 5 * 1000;
 
 export const setCache = (key, value) => {
     try {
@@ -51,4 +51,31 @@ export const clearAllCache = () => {
             localStorage.removeItem(`${k}_timestamp`);
         });
     } catch (e) { }
+};
+
+// --- CANALE DI SINCRONIZZAZIONE ISTANTANEA TRA SCHEDE E FINESTRE (BROADCASTCHANNEL) ---
+const syncChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window
+    ? new BroadcastChannel('mylessons_realtime_sync')
+    : null;
+
+export const broadcastSync = (type, payload = {}) => {
+    clearAllCache();
+    if (syncChannel) {
+        try {
+            syncChannel.postMessage({ type, payload, timestamp: Date.now() });
+        } catch (e) { }
+    }
+};
+
+export const onSync = (callback) => {
+    if (!syncChannel) return () => {};
+    const handler = (event) => {
+        if (event && event.data) {
+            callback(event.data);
+        }
+    };
+    syncChannel.addEventListener('message', handler);
+    return () => {
+        try { syncChannel.removeEventListener('message', handler); } catch (e) {}
+    };
 };

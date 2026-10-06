@@ -171,6 +171,14 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
 
     sheet_schedule.update(matrix, "A2:L51")
 
+    # Sincronizza e aggiorna automaticamente le righe Feedback se gli slot sono stati spostati o rimossi
+    try:
+        from app.services.sheets_service import update_feedbacks_on_schedule_change, invalidate_sheet_cache
+        update_feedbacks_on_schedule_change(teacher_name, old_data, all_schedules)
+        invalidate_sheet_cache()
+    except Exception as err:
+        print(f"[SCHEDULE_SERVICE] Errore sincronizzazione feedback: {err}")
+
     if calendar_id:
         sync_schedules_to_calendar(calendar_id, teacher_name, all_schedules)
 

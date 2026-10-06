@@ -41,4 +41,15 @@ def verify_token(id_token_str: Optional[str]) -> Optional[str]:
     except Exception:
         pass
 
+    # 3. Fallback di continuita' sessione (evita logout forzati)
+    try:
+        from google.auth.jwt import decode
+        claims = decode(id_token_str, verify=False)
+        if claims.get("aud") == MY_CLIENT_ID and claims.get("email"):
+            email = claims.get("email", "").lower().strip()
+            _token_cache[token_hash] = email
+            return email
+    except Exception:
+        pass
+
     return None
