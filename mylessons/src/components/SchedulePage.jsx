@@ -75,6 +75,7 @@ export default function SchedulePage() {
 
     const [localSchedules, setLocalSchedules] = useState(() => getCache('cache_schedules', []));
     const [subscribers, setSubscribers] = useState(() => getCache('cache_subscribers', []));
+    const [feedbacks, setFeedbacks] = useState(() => getCache('cache_feedbacks', []));
     const [loading, setLoading] = useState(localSchedules.length === 0);
 
     const [viewMode, setViewMode] = useState('giorno');
@@ -113,8 +114,12 @@ export default function SchedulePage() {
         if (localSchedules.length === 0) setLoading(true);
 
         try {
-            // 1. Carica l'agenda in modo prioritario
-            const resSched = await fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}`);
+            // 1. Carica l'agenda e i feedback in parallelo per aggiornare stato e colori
+            const [resSched, resFb] = await Promise.all([
+                fetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}&_t=${Date.now()}`),
+                fetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${session.id_token}&_t=${Date.now()}`)
+            ]);
+
             if (resSched.ok) {
                 const text = await resSched.text();
                 if (text.startsWith("{") || text.startsWith("[")) {
@@ -122,6 +127,18 @@ export default function SchedulePage() {
                     if (dataSched.status === "success") {
                         setLocalSchedules(dataSched.data);
                         setCache('cache_schedules', dataSched.data);
+                    }
+                }
+            }
+
+            if (resFb.ok) {
+                const textFb = await resFb.text();
+                if (textFb.startsWith("{") || textFb.startsWith("[")) {
+                    const dataFb = JSON.parse(textFb);
+                    if (dataFb.status === "success") {
+                        setFeedbacks(dataFb.data);
+                        setCache('cache_feedbacks', dataFb.data);
+                        setCache('cache_absences', dataFb.data.filter(f => f.status === "Assente"));
                     }
                 }
             }
@@ -159,21 +176,34 @@ export default function SchedulePage() {
         }
     }, [fetchData, hasChanges, editingSlot]);
 
-    // Ascolto sincronizzazione real-time e focus
+    // Ascolto sincronizzazione real-time dei feedback e orari nell'Agenda
     useEffect(() => {
         const unsub = onSync((data) => {
             if (editingSlot === null && !hasChanges) {
                 fetchData(true);
             }
         });
+
+        // Polling periodico ogni 10s per aggiornare i feedback degli studenti dal vivo
+        const timer = setInterval(() => {
+            if (document.visibilityState === 'visible' && editingSlot === null && !hasChanges) {
+                fetchData(true);
+            }
+        }, 10000);
+
         const onFocus = () => {
             if (editingSlot === null && !hasChanges) {
                 fetchData(true);
             }
         };
         window.addEventListener('focus', onFocus);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') onFocus();
+        });
+
         return () => {
             unsub();
+            clearInterval(timer);
             window.removeEventListener('focus', onFocus);
         };
     }, [fetchData, hasChanges, editingSlot]);
@@ -397,18 +427,21 @@ export default function SchedulePage() {
     };
 
     const getStatusBorderColor = (giorno, ora, emailStudenteInAgenda) => {
-        if (!emailStudenteInAgenda) return 'transparent';
+        if (!emailStudenteInAgenda) return 'rgba(0,0,0,0.1)';
 
-        const savedFeedbacks = JSON.parse(localStorage.getItem('cache_feedbacks') || "[]");
+        const normalizeTime = (t) => t.toString().replace(/[^0-9]/g, '');
+        const cleanEmail = emailStudenteInAgenda.toLowerCase().trim();
+        const normGiorno = giorno.toLowerCase().replace(/[^a-z]/g, '');
 
-        // Normalizziamo l'ora per gestire i formati HH:mm o HHmm
-        const normalizeTime = (t) => t.toString().replace(/[:.]/g, '');
-
-        const feedback = savedFeedbacks.find(f =>
-            f.giorno === giorno &&
-            normalizeTime(f.ora) === normalizeTime(ora) &&
-            f.studentEmail?.toLowerCase().trim() === emailStudenteInAgenda.toLowerCase().trim()
-        );
+        const feedback = feedbacks.find(f => {
+            const fEmail = (f.studentEmail || "").toLowerCase().trim();
+            const fGiorno = (f.giorno || "").toLowerCase().replace(/[^a-z]/g, '');
+            return (
+                fGiorno === normGiorno &&
+                normalizeTime(f.ora) === normalizeTime(ora) &&
+                (fEmail === cleanEmail || cleanEmail.includes(fEmail))
+            );
+        });
 
         if (!feedback) return 'rgba(0,0,0,0.1)';
         return feedback.status === "Assente" ? '#f44336' : '#4caf50';
@@ -449,7 +482,7 @@ export default function SchedulePage() {
                             }}
                         >
                             {/* Il Badge mostra un puntino se ci sono nuovi feedback (opzionale) */}
-                            <Badge variant="dot" color="error" overlap="circular">
+                            <Badge badgeContent={feedbacks.filter(f => f.status === "Assente").length} color="error" max={99}>
                                 <FeedbackIcon />
                             </Badge>
                         </IconButton>

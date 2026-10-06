@@ -398,7 +398,7 @@ export default function StudentSchedulePage() {
                                                             )}
                                                             {isInAttesa && (
                                                                 <Typography variant="caption" color="warning.dark" fontWeight="700" sx={{ display: 'block', mt: 0.5 }}>
-                                                                    Tocca per confermare o richiedere cambio
+                                                                    Tocca per confermare
                                                                 </Typography>
                                                             )}
                                                         </Box>
@@ -444,7 +444,7 @@ export default function StudentSchedulePage() {
                     )}
                     {!isAlreadyConfirmed && !isAlreadyAbsent && (
                         <Alert severity="info" sx={{ mb: 2.5, borderRadius: 3 }}>
-                            Conferma al docente se sarai presente a questa lezione.
+                            Conferma se sarai presente a questa lezione.
                         </Alert>
                     )}
 

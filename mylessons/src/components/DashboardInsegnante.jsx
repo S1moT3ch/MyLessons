@@ -128,9 +128,9 @@ export default function DashboardInsegnante() {
             const teacherFullName = `${userData.given_name} ${userData.family_name}`;
 
             const [resultFb, resultSubs, resultSched] = await Promise.all([
-                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`),
-                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}`),
-                safeFetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}`)
+                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherFeedbackSummary&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}&_t=${Date.now()}`),
+                safeFetch(`${APPS_SCRIPT_URL}?action=getTeacherSubscribers&teacherId=${userData.sub}&token=${userData.id_token}&_t=${Date.now()}`),
+                safeFetch(`${APPS_SCRIPT_URL}?action=getStudentSchedules&teacherName=${encodeURIComponent(teacherFullName)}&token=${userData.id_token}&_t=${Date.now()}`)
             ]);
 
             let absences = [];
@@ -184,7 +184,7 @@ export default function DashboardInsegnante() {
             if (document.visibilityState === 'visible') {
                 fetchDashboardData(true);
             }
-        }, 15000);
+        }, 10000);
         const handleFocus = () => {
             fetchDashboardData(true);
         };
