@@ -214,10 +214,25 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
         print(f"[SCHEDULE_SERVICE] Errore sincronizzazione feedback: {err}")
 
     if calendar_id:
-        clean_schedules_list = [
-            {"giorno": g, "ora": o, "email": ",".join(ems)}
-            for (g, o), ems in seen_slots.items()
-        ]
+        try:
+            from app.services.sheets_service import get_cached_sheet_values
+            studenti_rows = get_cached_sheet_values("Studenti", ttl_seconds=60)
+            nomi_map = {
+                r[1].lower().strip(): f"{r[2]} {r[3]}".strip()
+                for r in studenti_rows[1:] if len(r) >= 4 and r[1]
+            }
+        except Exception:
+            nomi_map = {}
+
+        clean_schedules_list = []
+        for (g, o), ems in seen_slots.items():
+            nomi = [nomi_map.get(em, "") for em in ems]
+            clean_schedules_list.append({
+                "giorno": g,
+                "ora": o,
+                "email": ",".join(ems),
+                "nome": ",".join(nomi)
+            })
         sync_schedules_to_calendar(calendar_id, teacher_name, clean_schedules_list)
 
     return True
@@ -291,7 +306,14 @@ def sync_all_teachers_to_calendar() -> List[Dict]:
                             ora = matrix[row_idx][col_ora].strip()
                             email = matrix[row_idx][col_em].strip() if col_em < len(matrix[row_idx]) else ""
                             if ora:
-                                schedules.append({"giorno": g, "ora": ora, "email": email})
+                                ems = [e.strip() for e in email.split(",") if e.strip()]
+                                nomi = [nomi_map.get(e.lower().strip(), "") for e in ems]
+                                schedules.append({
+                                    "giorno": g,
+                                    "ora": ora,
+                                    "email": email,
+                                    "nome": ",".join(nomi)
+                                })
                 sync_schedules_to_calendar(calendar_id, teacher_name, schedules)
                 results.append({"teacher": teacher_name, "status": "synced", "count": len(schedules)})
             except Exception as e:
