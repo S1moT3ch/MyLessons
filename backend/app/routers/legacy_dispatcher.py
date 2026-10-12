@@ -4,7 +4,8 @@ import json
 import time
 from datetime import datetime
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
+from app.services.stats_ui import get_stats_ui_html
 
 from app.config import TEACHER_SECRET_CODE, DAY_MAP, DAY_ORDER, CANONICAL_DAYS, normalize_day
 from app.core.auth import verify_token
@@ -64,8 +65,17 @@ async def handle_get(request: Request):
         res = calendar_service.sync_past_week_from_snapshot(snap_id, past_date)
         return JSONResponse(res)
 
+    # Interfaccia grafica di confronto dati e audit
+    if action in ("statsUI", "stats_ui", "audit"):
+        return HTMLResponse(get_stats_ui_html())
+
     # Statistiche reali lezioni salvate in DB Redis (protetto da password)
     if action == "getTeacherRealLessonStats":
+        fmt = params.get("format", "")
+        accept = request.headers.get("accept", "")
+        if fmt == "html" or ("text/html" in accept and "application/json" not in accept):
+            return HTMLResponse(get_stats_ui_html())
+
         key = params.get("key", "") or params.get("password", "")
         if not redis_service.is_authorized(key):
             return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
@@ -397,10 +407,20 @@ async def handle_post(request: Request):
 # ROTTE DEDICATE STATISTICHE DB REDIS & BACKFILL
 # ----------------------------------------------------
 @router.get("/api/stats")
-async def api_get_stats(key: str = "", teacher: Optional[str] = None):
-    if not redis_service.is_authorized(key):
-        return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
-    return JSONResponse(redis_service.get_teacher_real_stats(teacher))
+async def api_get_stats(request: Request, key: str = "", teacher: Optional[str] = None, format: str = ""):
+    accept = request.headers.get("accept", "")
+    # Se la richiesta è esplicitamente per JSON (da API/fetch)
+    if format == "json" or ("application/json" in accept and "text/html" not in accept):
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        return JSONResponse(redis_service.get_teacher_real_stats(teacher))
+    
+    # In tutti gli altri casi (da browser o visualizzazione), restituisce l'interfaccia interattiva di confronto dati
+    return HTMLResponse(get_stats_ui_html())
+
+@router.get("/stats")
+async def route_stats_page(request: Request):
+    return HTMLResponse(get_stats_ui_html())
 
 @router.post("/api/stats")
 async def api_post_stats(req: Request):
