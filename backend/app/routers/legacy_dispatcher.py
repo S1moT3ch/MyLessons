@@ -1,3 +1,4 @@
+from typing import Optional, List, Dict, Any
 import re
 import json
 import time
@@ -7,6 +8,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import TEACHER_SECRET_CODE, DAY_MAP, DAY_ORDER, CANONICAL_DAYS, normalize_day
 from app.core.auth import verify_token
+from app.services import redis_service
 from app.services import (
     sheets_service,
     schedule_service,
@@ -60,6 +62,23 @@ async def handle_get(request: Request):
         snap_id = params.get("snapshotId", "1ZpkJqrSy7DefweB_2z3oIAJQFWIziKBOGEu8_zG0xfw")
         past_date = params.get("pastDate", "2026-10-05")
         res = calendar_service.sync_past_week_from_snapshot(snap_id, past_date)
+        return JSONResponse(res)
+
+    # Statistiche reali lezioni salvate in DB Redis (protetto da password)
+    if action == "getTeacherRealLessonStats":
+        key = params.get("key", "") or params.get("password", "")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        teacher_filter = params.get("teacherName") or params.get("teacher")
+        stats = redis_service.get_teacher_real_stats(teacher_filter)
+        return JSONResponse(stats)
+
+    # Popolamento iniziale DB Redis recuperando gli eventi da Google Calendar
+    if action == "backfillRedisFromCalendar":
+        key = params.get("key", "") or params.get("password", "")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        res = redis_service.backfill_from_google_calendar()
         return JSONResponse(res)
 
     if action == "verifyTeacherCode":
@@ -372,3 +391,36 @@ async def handle_post(request: Request):
             return PlainTextResponse("Success")
 
     return PlainTextResponse("Error: Azione non gestita", status_code=400)
+
+
+# ----------------------------------------------------
+# ROTTE DEDICATE STATISTICHE DB REDIS & BACKFILL
+# ----------------------------------------------------
+@router.get("/api/stats")
+async def api_get_stats(key: str = "", teacher: Optional[str] = None):
+    if not redis_service.is_authorized(key):
+        return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+    return JSONResponse(redis_service.get_teacher_real_stats(teacher))
+
+@router.post("/api/stats")
+async def api_post_stats(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    key = body.get("key") or body.get("password", "")
+    if not redis_service.is_authorized(key):
+        return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+    teacher = body.get("teacherName") or body.get("teacher")
+    return JSONResponse(redis_service.get_teacher_real_stats(teacher))
+
+@router.post("/api/backfill")
+async def api_post_backfill(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    key = body.get("key") or body.get("password", "")
+    if not redis_service.is_authorized(key):
+        return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+    return JSONResponse(redis_service.backfill_from_google_calendar())

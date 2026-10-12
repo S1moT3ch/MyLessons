@@ -177,13 +177,19 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
                             return 0
                     curr_svolte = safe_int(r[5]) if len(r) > 5 else 0
                     curr_da_pagare = safe_int(r[6]) if len(r) > 6 else 0
-                    # Le lezioni svolte storiche possono solo aumentare quando si aggiungono lezioni (non decrementare a zero)
+                    # Se durante la settimana uno studente viene meno (diff < 0), la lezione viene scalata
                     if diff > 0:
                         r[5] = str(curr_svolte + diff)
                         r[6] = str(curr_da_pagare + diff)
                     elif diff < 0:
-                        # Se uno slot viene rimosso, aggiorna solo le lezioni da pagare se coerente, senza mai azzerare il pregresso
+                        # Lo studente è venuto meno dallo slot della settimana in corso: scala la lezione
+                        r[5] = str(max(0, curr_svolte + diff))
                         r[6] = str(max(0, curr_da_pagare + diff))
+                        try:
+                            from app.services import redis_service
+                            redis_service.mark_lesson_cancelled(clean_teacher, r_email, datetime.now().strftime("%Y-%m-%d"))
+                        except Exception as rd_err:
+                            print(f"[REDIS] Avviso registrazione cancellazione: {rd_err}")
 
         sheet_iscrizioni.update(iscrizioni_rows, "A1")
         from app.services.sheets_service import invalidate_sheet_cache
