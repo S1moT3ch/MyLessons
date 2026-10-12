@@ -169,12 +169,25 @@ def save_full_schedule(teacher_name: str, auth_email: str, all_schedules: List[D
                 r_teacher = r[3].lower().strip()
                 if r_email in final_diffs and r_teacher == clean_teacher:
                     diff = final_diffs[r_email]
-                    curr_svolte = int(r[5]) if len(r) > 5 and r[5].isdigit() else 0
-                    curr_da_pagare = int(r[6]) if len(r) > 6 and r[6].isdigit() else 0
-                    r[5] = str(max(0, curr_svolte + diff))
-                    r[6] = str(max(0, curr_da_pagare + diff))
+                    def safe_int(v):
+                        try:
+                            s = str(v).strip()
+                            return int(float(s)) if s else 0
+                        except Exception:
+                            return 0
+                    curr_svolte = safe_int(r[5]) if len(r) > 5 else 0
+                    curr_da_pagare = safe_int(r[6]) if len(r) > 6 else 0
+                    # Le lezioni svolte storiche possono solo aumentare quando si aggiungono lezioni (non decrementare a zero)
+                    if diff > 0:
+                        r[5] = str(curr_svolte + diff)
+                        r[6] = str(curr_da_pagare + diff)
+                    elif diff < 0:
+                        # Se uno slot viene rimosso, aggiorna solo le lezioni da pagare se coerente, senza mai azzerare il pregresso
+                        r[6] = str(max(0, curr_da_pagare + diff))
 
         sheet_iscrizioni.update(iscrizioni_rows, "A1")
+        from app.services.sheets_service import invalidate_sheet_cache
+        invalidate_sheet_cache("Iscrizioni")
 
     # Scrivi la matrice pulita senza righe doppie
     matrix = [[""] * 12 for _ in range(50)]

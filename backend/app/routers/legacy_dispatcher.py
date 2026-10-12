@@ -55,6 +55,13 @@ async def handle_get(request: Request):
         results = schedule_service.sync_all_teachers_to_calendar()
         return JSONResponse({"status": "success", "results": results})
 
+    # Sincronizzazione retroattiva settimana passata da snapshot
+    if action == "syncPastWeekFromSnapshot":
+        snap_id = params.get("snapshotId", "1ZpkJqrSy7DefweB_2z3oIAJQFWIziKBOGEu8_zG0xfw")
+        past_date = params.get("pastDate", "2026-10-05")
+        res = calendar_service.sync_past_week_from_snapshot(snap_id, past_date)
+        return JSONResponse(res)
+
     if action == "verifyTeacherCode":
         input_code = params.get("code", "")
         return JSONResponse({"status": "success", "isValid": bool(input_code) and (input_code == TEACHER_SECRET_CODE)})

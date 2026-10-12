@@ -27,11 +27,12 @@ def get_reference_monday(now: Optional[datetime] = None) -> datetime:
     else:
         return (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
-def get_start_date_from_slot(day_name: str, time_str: str, now: Optional[datetime] = None) -> datetime:
+def get_start_date_from_slot(day_name: str, time_str: str, now: Optional[datetime] = None, ref_monday: Optional[datetime] = None) -> datetime:
     clean_day = day_name.lower().strip().replace("ì", "i").replace("Ǫ", "i")
     offset = DAY_OFFSETS.get(clean_day, 0)
     
-    ref_monday = get_reference_monday(now)
+    if ref_monday is None:
+        ref_monday = get_reference_monday(now)
     target_date = ref_monday + timedelta(days=offset)
     
     clean_time = time_str.strip().replace(".", ":")
@@ -62,42 +63,21 @@ def create_and_share_teacher_calendar(teacher_email: str, teacher_name: str) -> 
         print(f"Errore creazione Calendario: {e}")
         return None
 
-def sync_schedules_to_calendar(calendar_id: str, teacher_name: str, all_schedules: List[Dict]):
+def sync_schedules_to_calendar(calendar_id: str, teacher_name: str, all_schedules: List[Dict], ref_monday: Optional[datetime] = None):
     if not calendar_id:
         return
     try:
         service = get_calendar_client()
         now = datetime.now()
-        ref_monday = get_reference_monday(now)
+        if ref_monday is None:
+            ref_monday = get_reference_monday(now)
         
         # 1. Finestra temporale di sincronizzazione: esattamente la settimana di riferimento (7 giorni)
+        # Gli eventi della settimana uscente o di settimane precedenti non vengono MAI toccati né cancellati!
         start_window = ref_monday
         end_window = ref_monday + timedelta(days=7)
 
-        # 2. Pulizia di sicurezza di eventuali eventi creati per errore nel passato recente (es. la settimana scorsa)
-        # che hanno l'indirizzo email come titolo (summary contenente '@') ed etichettati [ID_LESSON_APP]
-        try:
-            past_start = (ref_monday - timedelta(days=7)).isoformat() + "Z"
-            past_end = ref_monday.isoformat() + "Z"
-            past_res = service.events().list(
-                calendarId=calendar_id,
-                timeMin=past_start,
-                timeMax=past_end,
-                singleEvents=True
-            ).execute()
-            for pe in past_res.get("items", []):
-                pdesc = pe.get("description", "")
-                psummary = pe.get("summary", "")
-                if "[ID_LESSON_APP]" in pdesc and ("@" in psummary):
-                    try:
-                        service.events().delete(calendarId=calendar_id, eventId=pe["id"]).execute()
-                        print(f"[CALENDAR_SYNC] Rimosso evento errato nel passato con email nel titolo: {psummary} ({pe.get('id')})")
-                    except Exception as del_past_err:
-                        print(f"[CALENDAR_SYNC] Avviso cancellazione evento passato errato: {del_past_err}")
-        except Exception as past_clean_err:
-            print(f"[CALENDAR_SYNC] Avviso scansione eventi passati: {past_clean_err}")
-
-        # 3. Mappatura eventi esistenti nella settimana di riferimento
+        # 2. Mappatura eventi esistenti nella settimana di riferimento
         events_result = service.events().list(
             calendarId=calendar_id,
             timeMin=start_window.isoformat() + "Z",
@@ -136,7 +116,7 @@ def sync_schedules_to_calendar(calendar_id: str, teacher_name: str, all_schedule
             nome_field = slot.get("nome", "")
 
             if email_field and ora and giorno:
-                start_time = get_start_date_from_slot(giorno, ora, now)
+                start_time = get_start_date_from_slot(giorno, ora, now, ref_monday=ref_monday)
                 end_time = start_time + timedelta(minutes=60)
                 emails = [e.strip() for e in email_field.split(",") if e.strip()]
                 nomi = [n.strip() for n in nome_field.split(",")] if nome_field else []
@@ -306,3 +286,79 @@ def run_calendar_diagnostics() -> Dict[str, Any]:
         report["errors"].append(str(e))
 
     return report
+
+
+def parse_teacher_csv_content(csv_text: str) -> List[Dict]:
+    import csv, io
+    reader = list(csv.reader(io.StringIO(csv_text)))
+    if not reader:
+        return []
+    rows = reader[1:]
+    day_names = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"]
+    schedules = []
+    for day_idx, day_name in enumerate(day_names):
+        col_ora = day_idx * 2
+        col_em = col_ora + 1
+        for r in rows:
+            if col_ora < len(r) and r[col_ora].strip():
+                ora = r[col_ora].strip()
+                email = r[col_em].strip() if col_em < len(r) else ""
+                if ora and email:
+                    schedules.append({
+                        "giorno": day_name,
+                        "ora": ora,
+                        "email": email
+                    })
+    return schedules
+
+def sync_past_week_from_snapshot(snapshot_id: str = "1ZpkJqrSy7DefweB_2z3oIAJQFWIziKBOGEu8_zG0xfw", past_monday_date: str = "2026-10-05") -> Dict[str, Any]:
+    """
+    Sincronizza retroattivamente gli appuntamenti della settimana scorsa prendendoli dalla copia snapshot.
+    Gli eventi vengono creati con i nomi reali degli studenti e con date 5-10 Ottobre 2026.
+    La settimana corrente (12-17 Ottobre) rimane al 100% intatta.
+    """
+    import urllib.request
+    from app.core.google_clients import get_main_spreadsheet
+    
+    ref_monday = datetime.strptime(past_monday_date, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    ss_main = get_main_spreadsheet()
+    insegnanti_rows = ss_main.worksheet("Insegnanti").get_all_values()[1:]
+    
+    teacher_cal_map = {}
+    for r in insegnanti_rows:
+        if len(r) > 7 and r[7]:
+            t_name = f"{r[2]} {r[3]}".strip() if len(r) >= 4 else ""
+            if t_name:
+                teacher_cal_map[t_name] = r[7].strip()
+                
+    results = []
+    teacher_gids = {
+        "Katia Loliva": "1274375290",
+        "Simone Cantore": "0"
+    }
+    
+    for teacher_name, gid in teacher_gids.items():
+        cal_id = teacher_cal_map.get(teacher_name)
+        if not cal_id:
+            results.append({"teacher": teacher_name, "status": "skipped", "reason": "No calendar ID"})
+            continue
+            
+        try:
+            url = f"https://docs.google.com/spreadsheets/d/{snapshot_id}/export?format=csv&gid={gid}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as resp:
+                csv_data = resp.read().decode('utf-8', errors='ignore')
+                
+            schedules = parse_teacher_csv_content(csv_data)
+            sync_schedules_to_calendar(cal_id, teacher_name, schedules, ref_monday=ref_monday)
+            results.append({
+                "teacher": teacher_name,
+                "status": "synced",
+                "targetWeekMonday": past_monday_date,
+                "slotsCount": len(schedules)
+            })
+        except Exception as e:
+            results.append({"teacher": teacher_name, "status": "error", "error": str(e)})
+            
+    return {"status": "success", "pastWeek": past_monday_date, "results": results}
