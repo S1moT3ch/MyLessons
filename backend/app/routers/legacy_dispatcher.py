@@ -91,6 +91,14 @@ async def handle_get(request: Request):
         res = redis_service.backfill_from_google_calendar()
         return JSONResponse(res)
 
+    # Calcolo e memorizzazione degli offset di partenza nel DB Redis
+    if action in ("saveStartingOffsets", "calculateOffsets"):
+        key = params.get("key", "") or params.get("password", "")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        res = redis_service.calculate_and_save_starting_offsets()
+        return JSONResponse(res)
+
     if action == "verifyTeacherCode":
         input_code = params.get("code", "")
         return JSONResponse({"status": "success", "isValid": bool(input_code) and (input_code == TEACHER_SECRET_CODE)})
@@ -444,3 +452,16 @@ async def api_post_backfill(req: Request):
     if not redis_service.is_authorized(key):
         return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
     return JSONResponse(redis_service.backfill_from_google_calendar())
+
+@router.get("/api/offsets")
+@router.post("/api/offsets")
+async def api_offsets(req: Request, key: str = ""):
+    if not key:
+        try:
+            b = await req.json()
+            key = b.get("key") or b.get("password", "")
+        except Exception:
+            pass
+    if not redis_service.is_authorized(key):
+        return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+    return JSONResponse(redis_service.calculate_and_save_starting_offsets())

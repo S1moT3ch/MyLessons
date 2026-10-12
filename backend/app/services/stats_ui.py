@@ -341,6 +341,20 @@ HTML_CONTENT = """<!DOCTYPE html>
             border: 1px solid rgba(245, 158, 11, 0.2);
         }
 
+        .pill-info {
+            background: rgba(6, 182, 212, 0.15);
+            color: #22d3ee;
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+        .btn-warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+        .btn-warning:hover {
+            background: rgba(245, 158, 11, 0.25);
+            border-color: #fbbf24;
+        }
         .pill-danger {
             background: var(--danger-bg);
             color: var(--danger);
@@ -532,6 +546,9 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <button class="btn btn-secondary" onclick="loadStats()">
                     🔄 Aggiorna
                 </button>
+                <button class="btn btn-warning" onclick="triggerSaveOffsets()" title="Ricalcola e memorizza nel DB gli offset storici delle lezioni">
+                    ⚡ Salva Offset nel DB
+                </button>
                 <button class="btn btn-primary" onclick="triggerBackfill()">
                     📥 Sincronizza da Calendar
                 </button>
@@ -584,8 +601,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                         <tr>
                             <th>Insegnante</th>
                             <th>Studente</th>
-                            <th>Foglio (Iscrizioni)</th>
-                            <th>Calendar Reale</th>
+                            <th>Foglio (Excel)</th>
+                            <th>Calendar Salvate</th>
+                            <th>Offset Storico (DB)</th>
+                            <th>Totale Svolte</th>
                             <th>Differenza (&Delta;)</th>
                             <th>Stato</th>
                             <th>Tariffa</th>
@@ -751,20 +770,21 @@ HTML_CONTENT = """<!DOCTYPE html>
 
             fullData.forEach(t => {
                 (t.students || []).forEach(s => {
-                    const sName = s.studentName || "Sconosciuto";
+                    const sName = s.studentName || s.studentEmail || "Sconosciuto";
                     const sEmail = s.studentEmail || "";
                     if (search && !sName.toLowerCase().includes(search) && !sEmail.toLowerCase().includes(search)) {
                         return;
                     }
 
-                    const calSvolte = s.lezioniSvolte || 0;
+                    const calSvolte = s.calLezioniSvolte !== undefined ? s.calLezioniSvolte : (s.lezioniSvolte || 0);
                     const calProgrammate = s.lezioniProgrammate || 0;
+                    const offsetSvolte = s.offsetSvolte || 0;
+                    const totaleSvolte = s.lezioniSvolteTotali !== undefined ? s.lezioniSvolteTotali : (calSvolte + offsetSvolte);
+                    const sheetSvolte = s.sheetLezioniSvolte !== undefined ? s.sheetLezioniSvolte : (s.lezioniDaPagare || 0);
+                    const diff = s.diff !== undefined ? s.diff : (totaleSvolte - sheetSvolte);
                     const tariffa = s.tariffa || 0;
                     const amountDue = s.amountDue || 0;
-
-                    // Stima del foglio (da pagare)
-                    const sheetSvolte = s.lezioniDaPagare !== undefined ? s.lezioniDaPagare : calSvolte;
-                    const diff = calSvolte - sheetSvolte;
+                    const daPagare = s.lezioniDaPagare !== undefined ? s.lezioniDaPagare : totaleSvolte;
 
                     const tr = document.createElement("tr");
 
@@ -773,7 +793,7 @@ HTML_CONTENT = """<!DOCTYPE html>
                     if (diff === 0) {
                         statusPill = '<span class="pill pill-success">✓ Allineato</span>';
                     } else if (diff > 0) {
-                        statusPill = `<span class="pill pill-warning">⚠️ +${diff} non nel foglio</span>`;
+                        statusPill = `<span class="pill pill-warning">⚠️ +${diff} non a foglio</span>`;
                     } else {
                         statusPill = `<span class="pill pill-danger">⚠️ ${diff} discrepanza</span>`;
                     }
@@ -787,21 +807,32 @@ HTML_CONTENT = """<!DOCTYPE html>
                             </div>
                         </td>
                         <td>
-                            <span class="metric-badge">${sheetSvolte} svolte</span>
+                            <span class="metric-badge">${sheetSvolte} lez.</span>
                         </td>
                         <td>
-                            <span class="metric-badge" style="color: var(--accent-secondary);">${calSvolte} svolte</span>
-                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 4px;">(+${calProgrammate} prog.)</span>
+                            <span class="metric-badge" style="color: var(--accent-secondary);">${calSvolte} sal.</span>
+                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 2px;">(+${calProgrammate} prog.)</span>
                         </td>
                         <td>
-                            ${diff === 0 ? '<span style="color: var(--text-muted);">0</span>' : `<span class="diff-tag ${diff > 0 ? 'diff-plus' : 'diff-minus'}">${diff > 0 ? '+' : ''}${diff}</span>`}
+                            <span class="pill pill-info">+${offsetSvolte} prec.</span>
+                        </td>
+                        <td>
+                            <b style="color: #818cf8; font-size: 0.95rem;">${totaleSvolte}</b>
+                        </td>
+                        <td>
+                            ${diff === 0 ? '<b style="color: var(--success);">0</b>' : `<span class="diff-tag ${diff > 0 ? 'diff-plus' : 'diff-minus'}">${diff > 0 ? '+' : ''}${diff}</span>`}
                         </td>
                         <td>${statusPill}</td>
                         <td><span class="metric-badge">${tariffa > 0 ? tariffa + ' €/h' : '-'}</span></td>
-                        <td><b style="color: var(--success);">${amountDue.toFixed(2)} €</b></td>
+                        <td>
+                            <div>
+                                <b style="color: var(--success);">${amountDue.toFixed(2)} €</b>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">${daPagare} da pagare</div>
+                            </div>
+                        </td>
                         <td style="text-align: right;">
                             <button class="btn btn-secondary btn-sm" onclick='openDetails(${JSON.stringify(s).replace(/'/g, "&#39;")})'>
-                                📅 Lezioni (${s.lessons ? s.lessons.length : 0})
+                                🔍 Lezioni (${s.lessons ? s.lessons.length : 0})
                             </button>
                         </td>
                     `;
@@ -810,7 +841,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             });
 
             if (tbody.children.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding: 30px; color: var(--text-muted);">Nessun dato trovato per i filtri selezionati.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center; padding: 30px; color: var(--text-muted);">Nessun dato trovato per i filtri selezionati.</td></tr>';
             }
         }
 
