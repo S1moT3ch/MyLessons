@@ -628,6 +628,7 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
 
         # Applica gli offset storici memorizzati nel DB e sincronizza i totali
         for s_em, st_info in student_map.items():
+            off_data = offsets_map.get(s_em) or get_student_offset(t_name, s_em)
             match_sheet = sheet_data_map.get((t_name.lower(), s_em))
             if not match_sheet:
                 for (t_k, e_k), val in sheet_data_map.items():
@@ -651,7 +652,6 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
                 st_info["tariffa"] = match_sheet.get("tariffa", 0.0)
 
             # Recupera l'offset memorizzato nel DB (oppure calcolalo automaticamente)
-            off_data = offsets_map.get(s_em) or get_student_offset(t_name, s_em)
             if off_data:
                 offset_sv = int(off_data.get("offsetSvolte", 0))
             else:
