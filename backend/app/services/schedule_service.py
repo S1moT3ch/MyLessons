@@ -89,18 +89,41 @@ def get_teacher_subscribers_with_counts(teacher_id: str) -> List[Dict]:
         except Exception:
             pass
 
+    # Recupera i conteggi e i bilanci reali dal Database
+    db_stats = {}
+    if teacher_name:
+        try:
+            from app.services import redis_service
+            db_stats = redis_service.get_teacher_students_db_stats(teacher_name)
+        except Exception as e_db:
+            print(f"[SCHEDULE_SERVICE] Avviso statistiche DB per '{teacher_name}': {e_db}")
+
     result = []
     for row in filtered_subs:
         email = row[1].lower().strip()
+        from app.services.redis_service import canonicalize_email
+        clean_em = canonicalize_email(email)
         raw_date = row[4] if len(row) > 4 else ""
+
+        # Valori da DB con fallback a Google Sheets
+        st_db = db_stats.get(clean_em) or db_stats.get(email)
+        if st_db:
+            svolte = st_db.get("lezioniSvolte", 0)
+            da_pagare = st_db.get("lezioniDaPagare", 0)
+            tar = st_db.get("tariffa", 0.0) or (float(row[7]) if len(row) > 7 and row[7].replace(".", "", 1).isdigit() else 0.0)
+        else:
+            svolte = int(row[5]) if len(row) > 5 and row[5].isdigit() else 0
+            da_pagare = int(row[6]) if len(row) > 6 and row[6].isdigit() else 0
+            tar = float(row[7]) if len(row) > 7 and row[7].replace(".", "", 1).isdigit() else 0.0
+
         result.append({
             "studentName": nomi_studenti.get(email, "Sconosciuto"),
             "studentEmail": row[1],
             "date": format_iso_date(raw_date),
             "lessonCount": weekly_counts.get(email, 0),
-            "lezioniSvolte": int(row[5]) if len(row) > 5 and row[5].isdigit() else 0,
-            "lezioniDaPagare": int(row[6]) if len(row) > 6 and row[6].isdigit() else 0,
-            "tariffa": float(row[7]) if len(row) > 7 and row[7].replace(".", "", 1).isdigit() else 0
+            "lezioniSvolte": svolte,
+            "lezioniDaPagare": da_pagare,
+            "tariffa": tar
         })
     return result
 

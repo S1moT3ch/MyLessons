@@ -99,25 +99,69 @@ def get_student_subscriptions(student_email: str) -> List[Dict]:
         for r in rows[1:] if len(r) > 4 and r[1].lower().strip() == student_email.lower().strip()
     ]
 
+def get_teacher_name_by_id_or_email(teacher_id: str, email: str = "") -> str:
+    insegnanti = get_cached_sheet_values("Insegnanti", ttl_seconds=60)[1:]
+    clean_id = str(teacher_id or "").strip()
+    clean_em = str(email or "").lower().strip()
+    for r in insegnanti:
+        if len(r) >= 4:
+            if (clean_id and str(r[0]).strip() == clean_id) or (clean_em and str(r[1]).lower().strip() == clean_em):
+                return f"{r[2]} {r[3]}".strip() or r[1]
+    iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=60)[1:]
+    for r in iscrizioni:
+        if len(r) > 3 and clean_id and str(r[2]).strip() == clean_id and r[3]:
+            return str(r[3]).strip()
+    return ""
+
 def get_student_balances(student_email: str) -> List[Dict]:
     iscrizioni = get_cached_sheet_values("Iscrizioni", ttl_seconds=20)[1:]
     insegnanti = get_cached_sheet_values("Insegnanti", ttl_seconds=30)[1:]
 
     nomi_ins = {r[0]: f"{r[2]} {r[3]}".strip() or r[1] for r in insegnanti if len(r) >= 4 and r[0]}
-    
+
+    # Recupera i dati reali dal Database
+    student_db_stats = {}
+    try:
+        from app.services import redis_service
+        student_db_stats = redis_service.get_student_all_db_stats(student_email)
+    except Exception as e_db:
+        print(f"[SHEETS_SERVICE] Avviso recupero bilancio DB: {e_db}")
+
     result = []
+    seen_teachers = set()
     for r in iscrizioni:
         if len(r) > 1 and r[1].lower().strip() == student_email.lower().strip():
-            lez_svolte = int(r[5]) if len(r) > 5 and r[5].isdigit() else 0
-            lez_da_pagare = int(r[6]) if len(r) > 6 and r[6].isdigit() else 0
-            tariffa = float(r[7]) if len(r) > 7 and r[7].replace(".", "", 1).isdigit() else 0
             t_name = r[3] if len(r) > 3 and r[3] else nomi_ins.get(r[2], "Insegnante")
-            
+            t_key = t_name.lower().strip()
+            if t_key in seen_teachers:
+                continue
+            seen_teachers.add(t_key)
+
+            db_info = None
+            if student_db_stats:
+                db_info = student_db_stats.get(t_key)
+                if not db_info:
+                    for k, v in student_db_stats.items():
+                        if k in t_key or t_key in k:
+                            db_info = v
+                            break
+
+            if db_info:
+                lez_svolte = db_info.get("lezioniSvolte", 0)
+                lez_da_pagare = db_info.get("lezioniDaPagare", 0)
+                tariffa = db_info.get("tariffa", 0.0)
+                amount_due = db_info.get("amountDue", round(lez_da_pagare * tariffa, 2))
+            else:
+                lez_svolte = int(r[5]) if len(r) > 5 and r[5].isdigit() else 0
+                lez_da_pagare = int(r[6]) if len(r) > 6 and r[6].isdigit() else 0
+                tariffa = float(r[7]) if len(r) > 7 and r[7].replace(".", "", 1).isdigit() else 0
+                amount_due = round(lez_da_pagare * tariffa, 2)
+
             result.append({
                 "teacherName": t_name,
                 "lezioniSvolte": lez_svolte,
                 "lezioniDaPagare": lez_da_pagare,
-                "amountDue": lez_da_pagare * tariffa
+                "amountDue": amount_due
             })
     return result
 

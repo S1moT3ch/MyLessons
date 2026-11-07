@@ -102,6 +102,10 @@ def execute_redis_command(*args) -> Any:
                 return r_client.hgetall(sub_args[0])
             elif op == "KEYS":
                 return r_client.keys(sub_args[0])
+            elif op == "MGET":
+                return r_client.mget(*sub_args)
+            elif op == "DEL":
+                return r_client.delete(*sub_args)
         except Exception:
             pass
 
@@ -146,6 +150,15 @@ def execute_redis_command(*args) -> Any:
     elif op == "KEYS":
         pattern = cmd[1].replace("*", ".*")
         return [k for k in _local_mock_db.keys() if re.match(pattern, k)]
+    elif op == "MGET":
+        return [_local_mock_db.get(k) for k in cmd[1:]]
+    elif op == "DEL":
+        cnt = 0
+        for k in cmd[1:]:
+            if k in _local_mock_db:
+                del _local_mock_db[k]
+                cnt += 1
+        return cnt
     return None
 
 def save_or_update_lesson(teacher_name: str, lesson_data: Dict[str, Any]):
@@ -514,6 +527,10 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
     for t_name in all_teachers:
         lesson_fps = execute_redis_command("SMEMBERS", f"mylessons:teacher:{t_name}:lessons") or []
         offsets_map = get_all_offsets_for_teacher(t_name)
+        da_pagare_map = execute_redis_command("HGETALL", f"mylessons:da_pagare:{t_name}") or {}
+        if not isinstance(da_pagare_map, dict): da_pagare_map = {}
+        tariffe_map = execute_redis_command("HGETALL", f"mylessons:tariffe:{t_name}") or {}
+        if not isinstance(tariffe_map, dict): tariffe_map = {}
 
         student_map: Dict[str, Dict[str, Any]] = {}
 
@@ -565,7 +582,17 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
                     "status": status
                 })
 
-                if status == "svolta":
+                st_time_str = l_data.get("start_time", "")
+                is_svolta = (status == "svolta")
+                if not is_svolta and status != "annullata" and st_time_str:
+                    try:
+                        clean_st = st_time_str.replace("Z", "+00:00").split("+")[0]
+                        if datetime.fromisoformat(clean_st) <= now:
+                            is_svolta = True
+                    except Exception:
+                        pass
+
+                if is_svolta:
                     st_info["calLezioniSvolte"] += 1
                     total_cal_svolte += 1
                 elif status == "programmata":
@@ -613,8 +640,15 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
                 st_info["sheetLezioniDaPagare"] = match_sheet.get("sheetLezioniDaPagare", 0)
                 if not st_info.get("studentName") and match_sheet.get("studentName"):
                     st_info["studentName"] = match_sheet.get("studentName")
-                if st_info.get("tariffa", 0.0) == 0.0 and match_sheet.get("tariffa", 0.0) > 0.0:
-                    st_info["tariffa"] = match_sheet.get("tariffa", 0.0)
+            if s_em in tariffe_map and tariffe_map[s_em] is not None:
+                try:
+                    st_info["tariffa"] = float(tariffe_map[s_em])
+                except Exception:
+                    pass
+            elif off_data and off_data.get("tariffa") is not None and float(off_data.get("tariffa", 0)) > 0:
+                st_info["tariffa"] = float(off_data.get("tariffa", 0.0))
+            elif st_info.get("tariffa", 0.0) == 0.0 and match_sheet and match_sheet.get("tariffa", 0.0) > 0.0:
+                st_info["tariffa"] = match_sheet.get("tariffa", 0.0)
 
             # Recupera l'offset memorizzato nel DB (oppure calcolalo automaticamente)
             off_data = offsets_map.get(s_em) or get_student_offset(t_name, s_em)
@@ -654,7 +688,22 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
                 st_info["status"] = f"{diff} discrepanza"
 
             # Lezioni da pagare e importo dovuto
-            if st_info.get("sheetLezioniDaPagare", 0) > 0:
+            if s_em in da_pagare_map and da_pagare_map[s_em] is not None:
+                try:
+                    st_info["lezioniDaPagare"] = int(da_pagare_map[s_em])
+                except Exception:
+                    st_info["lezioniDaPagare"] = max(0, totale_effettivo)
+            elif off_data and "lezioniDaPagare" in off_data and off_data["lezioniDaPagare"] is not None:
+                try:
+                    st_info["lezioniDaPagare"] = int(off_data["lezioniDaPagare"])
+                except Exception:
+                    st_info["lezioniDaPagare"] = max(0, totale_effettivo)
+            elif off_data and "baseSheetDaPagare" in off_data and off_data["baseSheetDaPagare"] is not None:
+                try:
+                    st_info["lezioniDaPagare"] = int(off_data["baseSheetDaPagare"])
+                except Exception:
+                    st_info["lezioniDaPagare"] = max(0, totale_effettivo)
+            elif st_info.get("sheetLezioniDaPagare", 0) > 0:
                 st_info["lezioniDaPagare"] = st_info["sheetLezioniDaPagare"]
             else:
                 st_info["lezioniDaPagare"] = max(0, totale_effettivo)
@@ -694,3 +743,245 @@ def get_teacher_real_stats(teacher_filter: Optional[str] = None) -> Dict[str, An
         "teachersCount": len(stats_list),
         "data": stats_list
     }
+
+# ----------------------------------------------------
+# OPERAZIONI DB DIRETTE PER FRONTEND (LEZIONI SVOLTE E PAGAMENTI)
+# ----------------------------------------------------
+def update_student_paid_lessons_db(teacher_name: str, student_email: str, new_paid_value: int) -> bool:
+    """Aggiorna le lezioni da pagare / debito nel database per lo studente."""
+    clean_em = canonicalize_email(student_email)
+    clean_t = (teacher_name or "").strip()
+    try:
+        val = int(new_paid_value)
+    except Exception:
+        val = 0
+
+    # 1. Salva nella mappa dedicata da_pagare per questo insegnante
+    execute_redis_command("HSET", f"mylessons:da_pagare:{clean_t}", clean_em, str(val))
+    execute_redis_command("SET", f"mylessons:da_pagare:{clean_t}:{clean_em}", str(val))
+
+    # 2. Aggiorna l'offset record se presente
+    off_data = get_student_offset(clean_t, clean_em)
+    if off_data:
+        off_data["lezioniDaPagare"] = val
+        off_data["updatedAt"] = datetime.now().isoformat()
+        save_student_offset(clean_t, clean_em, off_data)
+    return True
+
+def update_student_rate_db(teacher_name: str, student_email: str, new_rate: float) -> bool:
+    """Aggiorna la tariffa oraria dello studente nel database."""
+    clean_em = canonicalize_email(student_email)
+    clean_t = (teacher_name or "").strip()
+    try:
+        rate = float(new_rate)
+    except Exception:
+        rate = 0.0
+
+    execute_redis_command("HSET", f"mylessons:tariffe:{clean_t}", clean_em, str(rate))
+    execute_redis_command("SET", f"mylessons:tariffa:{clean_t}:{clean_em}", str(rate))
+
+    off_data = get_student_offset(clean_t, clean_em)
+    if off_data:
+        off_data["tariffa"] = rate
+        off_data["updatedAt"] = datetime.now().isoformat()
+        save_student_offset(clean_t, clean_em, off_data)
+    return True
+
+def decrement_student_lessons_db(teacher_name: str, student_email: str) -> bool:
+    """Decrementa lezioni svolte e da pagare nel database a seguito di annullamento/rimozione."""
+    clean_em = canonicalize_email(student_email)
+    clean_t = (teacher_name or "").strip()
+
+    raw_dp = execute_redis_command("HGET", f"mylessons:da_pagare:{clean_t}", clean_em)
+    if raw_dp is not None:
+        try:
+            new_dp = max(0, int(raw_dp) - 1)
+            execute_redis_command("HSET", f"mylessons:da_pagare:{clean_t}", clean_em, str(new_dp))
+        except Exception:
+            pass
+
+    off_data = get_student_offset(clean_t, clean_em)
+    if off_data:
+        if "offsetSvolte" in off_data and off_data["offsetSvolte"] > 0:
+            off_data["offsetSvolte"] = max(0, off_data["offsetSvolte"] - 1)
+        if "lezioniDaPagare" in off_data:
+            off_data["lezioniDaPagare"] = max(0, int(off_data.get("lezioniDaPagare", 1)) - 1)
+        off_data["updatedAt"] = datetime.now().isoformat()
+        save_student_offset(clean_t, clean_em, off_data)
+    return True
+
+def get_teacher_students_db_stats(teacher_name: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Recupera le statistiche reali di ciascuno studente per l'insegnante specificato direttamente dal DB:
+    - lezioniSvolte (eventi calendario svolti o passati + offset storico memorizzato)
+    - lezioniDaPagare (valore salvato nel DB o dedotto da offset/foglio)
+    - tariffa (tariffa memorizzata nel DB o nel foglio)
+    - amountDue (lezioniDaPagare * tariffa)
+    """
+    clean_t = (teacher_name or "").strip()
+    if not clean_t:
+        return {}
+
+    now = datetime.now()
+
+    # 1. Recupera tutti i fingerprints delle lezioni dell'insegnante dal DB
+    lesson_fps = execute_redis_command("SMEMBERS", f"mylessons:teacher:{clean_t}:lessons") or []
+
+    cal_counts: Dict[str, int] = {}
+
+    if lesson_fps:
+        keys = [f"mylessons:lesson:{fp}" for fp in lesson_fps]
+        raw_list = []
+        for i in range(0, len(keys), 50):
+            batch = keys[i:i+50]
+            res = execute_redis_command("MGET", *batch)
+            if res:
+                if isinstance(res, list):
+                    raw_list.extend(res)
+                else:
+                    raw_list.append(res)
+
+        for raw in raw_list:
+            if not raw:
+                continue
+            try:
+                l_data = json.loads(raw) if isinstance(raw, str) else raw
+                s_em = canonicalize_email(l_data.get("student_email", ""))
+                if not s_em:
+                    continue
+                status = l_data.get("status", "svolta")
+                st = l_data.get("start_time", "")
+
+                is_svolta = (status == "svolta")
+                if not is_svolta and status != "annullata" and st:
+                    try:
+                        clean_st = st.replace("Z", "+00:00").split("+")[0]
+                        if datetime.fromisoformat(clean_st) <= now:
+                            is_svolta = True
+                    except Exception:
+                        pass
+
+                if is_svolta:
+                    cal_counts[s_em] = cal_counts.get(s_em, 0) + 1
+            except Exception:
+                pass
+
+    # 2. Recupera tutti gli offset salvati nel DB
+    offsets_map = get_all_offsets_for_teacher(clean_t)
+
+    # 3. Recupera pagamenti e tariffe personalizzate salvate nel DB
+    da_pagare_map = execute_redis_command("HGETALL", f"mylessons:da_pagare:{clean_t}") or {}
+    if not isinstance(da_pagare_map, dict): da_pagare_map = {}
+
+    tariffe_map = execute_redis_command("HGETALL", f"mylessons:tariffe:{clean_t}") or {}
+    if not isinstance(tariffe_map, dict): tariffe_map = {}
+
+    # 4. Unisci tutti gli studenti conosciuti nel DB
+    all_emails = set(cal_counts.keys()).union(set(offsets_map.keys())).union(set(da_pagare_map.keys()))
+
+    # Se ci sono studenti nel foglio Iscrizioni che non hanno ancora record DB, prendi baseline da Iscrizioni
+    sheet_data_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        from app.services.sheets_service import get_cached_sheet_values
+        isc_rows = get_cached_sheet_values("Iscrizioni", ttl_seconds=30)
+        for r in isc_rows[1:]:
+            if len(r) > 3 and r[1]:
+                t_nm = str(r[3] or "").strip()
+                if clean_t.lower() in t_nm.lower() or t_nm.lower() in clean_t.lower():
+                    s_em = canonicalize_email(r[1])
+                    all_emails.add(s_em)
+                    sv = int(r[5]) if len(r) > 5 and str(r[5]).strip().isdigit() else 0
+                    dp = int(r[6]) if len(r) > 6 and str(r[6]).strip().isdigit() else 0
+                    tar = float(r[7]) if len(r) > 7 and str(r[7]).replace(".", "", 1).strip().isdigit() else 0.0
+                    sheet_data_map[s_em] = {"sheetSvolte": sv, "sheetDaPagare": dp, "tariffa": tar}
+    except Exception:
+        pass
+
+    result = {}
+    for s_em in all_emails:
+        cal_sv = cal_counts.get(s_em, 0)
+        off_data = offsets_map.get(s_em) or get_student_offset(clean_t, s_em)
+        sh_info = sheet_data_map.get(s_em, {})
+
+        if off_data:
+            offset_sv = int(off_data.get("offsetSvolte", 0))
+        else:
+            sh_sv = sh_info.get("sheetSvolte", 0)
+            offset_sv = max(0, sh_sv - cal_sv)
+
+        lez_svolte = cal_sv + offset_sv
+
+        # Lezioni da pagare: DB > offset record > sheet baseline
+        if s_em in da_pagare_map and da_pagare_map[s_em] is not None:
+            try:
+                lez_da_pagare = int(da_pagare_map[s_em])
+            except Exception:
+                lez_da_pagare = lez_svolte
+        elif off_data and "lezioniDaPagare" in off_data and off_data["lezioniDaPagare"] is not None:
+            try:
+                lez_da_pagare = int(off_data["lezioniDaPagare"])
+            except Exception:
+                lez_da_pagare = lez_svolte
+        elif off_data and "baseSheetDaPagare" in off_data and off_data["baseSheetDaPagare"] is not None:
+            try:
+                lez_da_pagare = int(off_data["baseSheetDaPagare"])
+            except Exception:
+                lez_da_pagare = lez_svolte
+        elif sh_info and "sheetDaPagare" in sh_info:
+            lez_da_pagare = sh_info["sheetDaPagare"]
+        else:
+            lez_da_pagare = lez_svolte
+
+        # Tariffa: DB > offset record > sheet
+        if s_em in tariffe_map and tariffe_map[s_em] is not None:
+            try:
+                tariffa = float(tariffe_map[s_em])
+            except Exception:
+                tariffa = 0.0
+        elif off_data and off_data.get("tariffa") is not None and float(off_data.get("tariffa", 0)) > 0:
+            tariffa = float(off_data.get("tariffa", 0.0))
+        elif sh_info and sh_info.get("tariffa", 0.0) > 0:
+            tariffa = float(sh_info.get("tariffa", 0.0))
+        else:
+            tariffa = 0.0
+
+        amount_due = round(lez_da_pagare * tariffa, 2)
+
+        result[s_em] = {
+            "lezioniSvolte": lez_svolte,
+            "lezioniDaPagare": lez_da_pagare,
+            "tariffa": tariffa,
+            "amountDue": amount_due
+        }
+
+    return result
+
+def get_student_all_db_stats(student_email: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Recupera i dati DB (lezioniSvolte, lezioniDaPagare, tariffa, amountDue)
+    per un determinato studente per ciascuno dei suoi insegnanti.
+    Ritorna un dizionario con chiave teacher_name in formato normalizzato.
+    """
+    clean_em = canonicalize_email(student_email)
+    teachers = list(execute_redis_command("SMEMBERS", "mylessons:teachers") or [])
+    for def_t in ["Simone Cantore", "Katia Loliva"]:
+        if def_t not in teachers:
+            teachers.append(def_t)
+
+    res = {}
+    for t_name in teachers:
+        t_stats = get_teacher_students_db_stats(t_name)
+        if clean_em in t_stats:
+            res[t_name.lower().strip()] = {
+                "teacherName": t_name,
+                **t_stats[clean_em]
+            }
+        else:
+            for em_key, stat_val in t_stats.items():
+                if em_key == clean_em or em_key == student_email.lower().strip():
+                    res[t_name.lower().strip()] = {
+                        "teacherName": t_name,
+                        **stat_val
+                    }
+                    break
+    return res

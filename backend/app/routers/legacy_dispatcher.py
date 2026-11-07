@@ -299,7 +299,21 @@ async def handle_post(request: Request):
     if action == "updatePaidLessons":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
         try:
-            success = sheets_service.update_paid_lessons(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newPaidValue"))
+            student_em = body.get("studentEmail", "")
+            teacher_id = body.get("teacherId", "")
+            new_val = body.get("newPaidValue", 0)
+
+            teacher_name = body.get("teacherName", "")
+            if not teacher_name:
+                teacher_name = sheets_service.get_teacher_name_by_id_or_email(teacher_id, auth_email)
+
+            if teacher_name:
+                try:
+                    redis_service.update_student_paid_lessons_db(teacher_name, student_em, new_val)
+                except Exception as e_red:
+                    print(f"[DISPATCHER] updatePaidLessons redis error: {e_red}")
+
+            success = sheets_service.update_paid_lessons(student_em, teacher_id, new_val)
             return PlainTextResponse("Success" if success else "Error: Non trovato")
         except Exception as e:
             print(f"[DISPATCHER] updatePaidLessons error: {e}")
@@ -308,7 +322,21 @@ async def handle_post(request: Request):
     if action == "updateStudentRate":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
         try:
-            success = sheets_service.update_student_rate(body.get("studentEmail", ""), body.get("teacherId", ""), body.get("newRate"))
+            student_em = body.get("studentEmail", "")
+            teacher_id = body.get("teacherId", "")
+            new_rate = body.get("newRate", 0.0)
+
+            teacher_name = body.get("teacherName", "")
+            if not teacher_name:
+                teacher_name = sheets_service.get_teacher_name_by_id_or_email(teacher_id, auth_email)
+
+            if teacher_name:
+                try:
+                    redis_service.update_student_rate_db(teacher_name, student_em, new_rate)
+                except Exception as e_red:
+                    print(f"[DISPATCHER] updateStudentRate redis error: {e_red}")
+
+            success = sheets_service.update_student_rate(student_em, teacher_id, new_rate)
             return PlainTextResponse("Success" if success else "Error: Non trovato")
         except Exception as e:
             print(f"[DISPATCHER] updateStudentRate error: {e}")
@@ -326,7 +354,14 @@ async def handle_post(request: Request):
     if action == "removeSlotAndDecrement":
         if not auth_email: return PlainTextResponse("Error: Non autorizzato", status_code=401)
         try:
-            schedule_service.remove_slot_and_decrement(body.get("studentEmail", ""), body.get("teacherName", ""))
+            student_em = body.get("studentEmail", "")
+            teacher_name = body.get("teacherName", "")
+            if teacher_name:
+                try:
+                    redis_service.decrement_student_lessons_db(teacher_name, student_em)
+                except Exception as e_red:
+                    print(f"[DISPATCHER] removeSlotAndDecrement redis error: {e_red}")
+            schedule_service.remove_slot_and_decrement(student_em, teacher_name)
             return PlainTextResponse("Success")
         except Exception as e:
             print(f"[DISPATCHER] removeSlotAndDecrement error: {e}")
