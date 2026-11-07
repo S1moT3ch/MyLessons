@@ -1,3 +1,4 @@
+# Router di compatibilità API FastAPI per MyLessons
 from typing import Optional, List, Dict, Any
 import re
 import json
