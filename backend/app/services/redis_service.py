@@ -985,3 +985,135 @@ def get_student_all_db_stats(student_email: str) -> Dict[str, Dict[str, Any]]:
                     }
                     break
     return res
+
+# ----------------------------------------------------
+# GESTIONE MANUALE DB DA INTERFACCIA WEB PROTETTA
+# ----------------------------------------------------
+def update_student_full_db_data(
+    teacher_name: str,
+    student_email: str,
+    offset_svolte: Optional[int] = None,
+    lezioni_da_pagare: Optional[int] = None,
+    tariffa: Optional[float] = None,
+    sync_sheet: bool = True
+) -> Dict[str, Any]:
+    """
+    Aggiorna manualmente e atomicamente tutti i dati di uno studente nel DB Redis per un insegnante:
+    - offsetSvolte: lezioni storiche di partenza
+    - lezioniDaPagare: debito lezioni residue
+    - tariffa: tariffa oraria
+    - opzionalmente sincronizza il foglio Google Sheets per ridondanza
+    """
+    clean_t = (teacher_name or "").strip()
+    clean_em = canonicalize_email(student_email)
+    now = datetime.now()
+
+    off_data = get_student_offset(clean_t, clean_em) or {
+        "teacherName": clean_t,
+        "studentEmail": clean_em,
+        "studentName": clean_em.split("@")[0].title(),
+        "offsetSvolte": 0,
+        "baseCalendarSvolte": 0,
+        "totaleSvolte": 0,
+        "updatedAt": now.isoformat()
+    }
+
+    if offset_svolte is not None:
+        try:
+            val_off = int(offset_svolte)
+            off_data["offsetSvolte"] = val_off
+            cal_sv = int(off_data.get("baseCalendarSvolte", 0))
+            off_data["totaleSvolte"] = cal_sv + val_off
+        except Exception:
+            pass
+
+    if lezioni_da_pagare is not None:
+        try:
+            val_dp = int(lezioni_da_pagare)
+            off_data["lezioniDaPagare"] = val_dp
+            execute_redis_command("HSET", f"mylessons:da_pagare:{clean_t}", clean_em, str(val_dp))
+            execute_redis_command("SET", f"mylessons:da_pagare:{clean_t}:{clean_em}", str(val_dp))
+        except Exception:
+            pass
+
+    if tariffa is not None:
+        try:
+            val_tar = float(tariffa)
+            off_data["tariffa"] = val_tar
+            execute_redis_command("HSET", f"mylessons:tariffe:{clean_t}", clean_em, str(val_tar))
+            execute_redis_command("SET", f"mylessons:tariffa:{clean_t}:{clean_em}", str(val_tar))
+        except Exception:
+            pass
+
+    off_data["updatedAt"] = now.isoformat()
+    save_student_offset(clean_t, clean_em, off_data)
+
+    if sync_sheet:
+        try:
+            from app.services import sheets_service
+            sheets_service.update_student_sheet_data(
+                student_email=clean_em,
+                teacher_name_or_id=clean_t,
+                svolte=off_data.get("totaleSvolte"),
+                da_pagare=lezioni_da_pagare,
+                tariffa=tariffa
+            )
+        except Exception as e_sheet:
+            print(f"[REDIS_SERVICE] sync_sheet warning: {e_sheet}")
+
+    return {
+        "status": "success",
+        "teacherName": clean_t,
+        "studentEmail": clean_em,
+        "offsetSvolte": off_data.get("offsetSvolte"),
+        "totaleSvolte": off_data.get("totaleSvolte"),
+        "lezioniDaPagare": off_data.get("lezioniDaPagare"),
+        "tariffa": off_data.get("tariffa"),
+        "updatedAt": now.isoformat()
+    }
+
+def add_manual_lesson_db(teacher_name: str, student_email: str, student_name: str = "", start_time_iso: str = "", status: str = "svolta", tariffa: float = 0.0) -> Dict[str, Any]:
+    """Aggiunge manualmente una singola lezione nel DB Redis."""
+    clean_em = canonicalize_email(student_email)
+    clean_t = (teacher_name or "").strip()
+    now = datetime.now()
+    st = start_time_iso.strip() if start_time_iso else now.strftime("%Y-%m-%dT%H:%M:%S")
+    clean_dt = st.replace(":", "").replace("-", "").replace(" ", "_")
+    fp = f"FP_MAN_{clean_t.replace(' ', '')}_{clean_em.replace('@', '_').replace('.', '_')}_{clean_dt}"
+
+    lesson_data = {
+        "fingerprint": fp,
+        "event_id": fp,
+        "teacher_name": clean_t,
+        "student_email": clean_em,
+        "student_name": student_name or clean_em.split("@")[0].title(),
+        "start_time": st,
+        "end_time": st,
+        "status": status,
+        "tariffa": float(tariffa or 0.0),
+        "source": "manual_admin_web",
+        "synced_at": now.isoformat()
+    }
+    save_or_update_lesson(clean_t, lesson_data)
+    return {"status": "success", "lesson": lesson_data}
+
+def update_lesson_status_db(fingerprint: str, new_status: str) -> bool:
+    """Modifica lo stato di una specifica lezione nel DB (es. 'svolta', 'annullata', 'programmata')."""
+    raw = execute_redis_command("GET", f"mylessons:lesson:{fingerprint}")
+    if raw:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            data["status"] = new_status
+            data["updated_at"] = datetime.now().isoformat()
+            execute_redis_command("SET", f"mylessons:lesson:{fingerprint}", json.dumps(data))
+            return True
+        except Exception:
+            pass
+    return False
+
+def delete_lesson_from_db(teacher_name: str, fingerprint: str) -> bool:
+    """Rimuove completamente una lezione dal DB Redis."""
+    clean_t = (teacher_name or "").strip()
+    execute_redis_command("DEL", f"mylessons:lesson:{fingerprint}")
+    execute_redis_command("SREM", f"mylessons:teacher:{clean_t}:lessons", fingerprint)
+    return True

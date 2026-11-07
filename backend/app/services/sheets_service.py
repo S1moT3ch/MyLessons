@@ -165,6 +165,29 @@ def get_student_balances(student_email: str) -> List[Dict]:
             })
     return result
 
+def update_student_sheet_data(student_email: str, teacher_name_or_id: str, svolte: Optional[int] = None, da_pagare: Optional[int] = None, tariffa: Optional[float] = None) -> bool:
+    try:
+        invalidate_sheet_cache("Iscrizioni")
+        sheet = get_main_spreadsheet().worksheet("Iscrizioni")
+        rows = sheet.get_all_values()
+        clean_em = student_email.lower().strip()
+        clean_target = teacher_name_or_id.lower().strip()
+        for idx, r in enumerate(rows[1:], start=2):
+            if len(r) > 3 and r[1].lower().strip() == clean_em:
+                t_id = str(r[2]).strip().lower()
+                t_nm = str(r[3]).strip().lower()
+                if clean_target in t_id or clean_target in t_nm or t_nm in clean_target:
+                    if svolte is not None:
+                        sheet.update_cell(idx, 6, int(svolte))
+                    if da_pagare is not None:
+                        sheet.update_cell(idx, 7, int(da_pagare))
+                    if tariffa is not None:
+                        sheet.update_cell(idx, 8, float(tariffa))
+                    return True
+    except Exception as e:
+        print(f"[SHEETS_SERVICE] update_student_sheet_data error: {e}")
+    return False
+
 def update_paid_lessons(student_email: str, teacher_id: str, new_value: Any) -> bool:
     invalidate_sheet_cache("Iscrizioni")
     sheet = get_main_spreadsheet().worksheet("Iscrizioni")

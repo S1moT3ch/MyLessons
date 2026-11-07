@@ -1,1 +1,5 @@
 MyLessons_Backend_GAS_bk.txt
+
+__pycache__/
+*.pyc
+.vscode/

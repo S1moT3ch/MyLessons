@@ -32,17 +32,28 @@ router = APIRouter()
 # ----------------------------------------------------
 @router.get("/")
 @router.get("/api")
+@router.get("/admin")
+@router.get("/dashboard")
+@router.get("/gestione-db")
 async def handle_get(request: Request):
     params = dict(request.query_params)
     action = params.get("action")
     id_token_str = params.get("token")
 
+    path = request.url.path
+    accept = request.headers.get("accept", "")
+    if any(p in path for p in ("/admin", "/dashboard", "/gestione-db")):
+        return HTMLResponse(get_stats_ui_html())
+
     # 1. Se si apre direttamente l'URL nel browser senza parametri
     if not action and not id_token_str:
+        if "text/html" in accept and "application/json" not in accept:
+            return HTMLResponse(get_stats_ui_html())
         return JSONResponse({
             "status": "online",
             "service": "MyLessons Backend API (Python / FastAPI)",
-            "message": "Il backend è attivo e operativo. Per accedere all'applicazione, apri il frontend all'indirizzo http://localhost:3000",
+            "message": "Il backend è attivo e operativo. Per accedere all'interfaccia di gestione DB, apri /admin nel browser",
+            "admin_url": "/admin",
             "frontend_url": "http://localhost:3000"
         })
 
@@ -110,6 +121,58 @@ async def handle_get(request: Request):
     if action == "checkUser":
         exists, role = sheets_service.check_user_role(params.get("email", ""))
         return JSONResponse({"exists": exists, "role": role})
+
+    if action in ("updateStudentDbData", "updateDbStudent"):
+        key = params.get("key") or params.get("password")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        t_name = params.get("teacherName") or params.get("teacher")
+        s_email = params.get("studentEmail") or params.get("email")
+        offset = params.get("offsetSvolte")
+        da_pagare = params.get("lezioniDaPagare")
+        tariffa = params.get("tariffa")
+        sync_sheet = str(params.get("syncSheet", "true")).lower() in ("true", "1", "yes")
+
+        res = redis_service.update_student_full_db_data(
+            teacher_name=t_name,
+            student_email=s_email,
+            offset_svolte=int(offset) if offset is not None and str(offset).strip() != "" else None,
+            lezioni_da_pagare=int(da_pagare) if da_pagare is not None and str(da_pagare).strip() != "" else None,
+            tariffa=float(tariffa) if tariffa is not None and str(tariffa).strip() != "" else None,
+            sync_sheet=sync_sheet
+        )
+        return JSONResponse(res)
+
+    if action == "addManualLesson":
+        key = params.get("key") or params.get("password")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        t_name = params.get("teacherName") or params.get("teacher")
+        s_email = params.get("studentEmail") or params.get("email")
+        s_name = params.get("studentName", "")
+        start_time = params.get("startTime", "")
+        status = params.get("status", "svolta")
+        tariffa = float(params.get("tariffa", 0.0) or 0.0)
+        res = redis_service.add_manual_lesson_db(t_name, s_email, s_name, start_time, status, tariffa)
+        return JSONResponse(res)
+
+    if action == "updateLessonStatus":
+        key = params.get("key") or params.get("password")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        fp = params.get("fingerprint") or params.get("fp")
+        new_status = params.get("status", "svolta")
+        ok = redis_service.update_lesson_status_db(fp, new_status)
+        return JSONResponse({"status": "success" if ok else "error"})
+
+    if action == "deleteLesson":
+        key = params.get("key") or params.get("password")
+        if not redis_service.is_authorized(key):
+            return JSONResponse({"status": "error", "message": "Non autorizzato: Password errata"}, status_code=401)
+        fp = params.get("fingerprint") or params.get("fp")
+        t_name = params.get("teacherName") or params.get("teacher")
+        ok = redis_service.delete_lesson_from_db(t_name, fp)
+        return JSONResponse({"status": "success" if ok else "error"})
 
     # Protezione con Token Google
     auth_email = verify_token(id_token_str)
@@ -286,6 +349,49 @@ async def handle_post(request: Request):
 
     action = body.get("action")
     id_token_str = body.get("id_token")
+
+    # Azioni protette da password di amministrazione (da Web UI Admin)
+    admin_key = body.get("key") or body.get("password") or request.query_params.get("key")
+    if admin_key and redis_service.is_authorized(admin_key):
+        if action in ("updateStudentDbData", "updateDbStudent"):
+            t_name = body.get("teacherName") or body.get("teacher")
+            s_email = body.get("studentEmail") or body.get("email")
+            offset = body.get("offsetSvolte")
+            da_pagare = body.get("lezioniDaPagare")
+            tariffa = body.get("tariffa")
+            sync_sheet = bool(body.get("syncSheet", True))
+            res = redis_service.update_student_full_db_data(
+                teacher_name=t_name,
+                student_email=s_email,
+                offset_svolte=int(offset) if offset is not None and str(offset).strip() != "" else None,
+                lezioni_da_pagare=int(da_pagare) if da_pagare is not None and str(da_pagare).strip() != "" else None,
+                tariffa=float(tariffa) if tariffa is not None and str(tariffa).strip() != "" else None,
+                sync_sheet=sync_sheet
+            )
+            return JSONResponse(res)
+
+        if action == "addManualLesson":
+            t_name = body.get("teacherName") or body.get("teacher")
+            s_email = body.get("studentEmail") or body.get("email")
+            s_name = body.get("studentName", "")
+            start_time = body.get("startTime", "")
+            status = body.get("status", "svolta")
+            tariffa = float(body.get("tariffa", 0.0) or 0.0)
+            res = redis_service.add_manual_lesson_db(t_name, s_email, s_name, start_time, status, tariffa)
+            return JSONResponse(res)
+
+        if action == "updateLessonStatus":
+            fp = body.get("fingerprint") or body.get("fp")
+            new_status = body.get("status", "svolta")
+            ok = redis_service.update_lesson_status_db(fp, new_status)
+            return JSONResponse({"status": "success" if ok else "error"})
+
+        if action == "deleteLesson":
+            fp = body.get("fingerprint") or body.get("fp")
+            t_name = body.get("teacherName") or body.get("teacher")
+            ok = redis_service.delete_lesson_from_db(t_name, fp)
+            return JSONResponse({"status": "success" if ok else "error"})
+
     auth_email = verify_token(id_token_str)
 
     if action == "saveFullSchedule":
